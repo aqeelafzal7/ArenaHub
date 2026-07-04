@@ -3,7 +3,10 @@
  * If no API key is provided, defaults to the specified key: 3299ac654560e9a1b6f75312431ac909.
  */
 export async function uploadToImgBB(file: File, apiKey?: string): Promise<string> {
-  const activeKey = apiKey && apiKey.trim() !== '' ? apiKey.trim() : '3299ac654560e9a1b6f75312431ac909';
+  const metaEnv = (import.meta as any).env || {};
+  const activeKey = apiKey && apiKey.trim() !== '' 
+    ? apiKey.trim() 
+    : (metaEnv.VITE_IMGBB_API_KEY || '3299ac654560e9a1b6f75312431ac909');
 
   const formData = new FormData();
   formData.append('image', file);
