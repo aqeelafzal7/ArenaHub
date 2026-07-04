@@ -28,6 +28,10 @@ export interface Quiz {
   isActive: boolean;
   isLiveCompetition: boolean;
   createdAt: any;
+  totalAttemptsAllowed?: number;
+  allowedCnics?: string[];
+  openAt?: string;
+  closeAt?: string;
 }
 
 export interface Question {

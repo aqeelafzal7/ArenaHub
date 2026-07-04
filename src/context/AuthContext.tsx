@@ -23,7 +23,7 @@ interface AuthContextType {
   signUpWithEmail: (email: string, pass: string, name: string) => Promise<void>;
   loginWithEmail: (email: string, pass: string) => Promise<void>;
   logout: () => Promise<void>;
-  onboardUser: (role: UserRole, cnic: string) => Promise<void>;
+  onboardUser: (role: UserRole, cnic: string, name: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
 
@@ -125,7 +125,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const onboardUser = async (role: UserRole, cnic: string) => {
+  const onboardUser = async (role: UserRole, cnic: string, name: string) => {
     if (!user) throw new Error('No authenticated user found for onboarding.');
     const path = `users/${user.uid}`;
     
@@ -133,7 +133,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const newProfile: UserProfile = {
       uid: user.uid,
       email: user.email || '',
-      name: user.displayName || 'No Name',
+      name: name.trim() || user.displayName || 'No Name',
       cnic,
       role,
       createdAt: new Date().toISOString() // String formatted or timestamp

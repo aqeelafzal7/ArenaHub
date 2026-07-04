@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { ShieldCheck, Users, ClipboardSignature, UserCheck, CreditCard } from 'lucide-react';
+import { Users, ClipboardSignature, UserCheck, CreditCard, User } from 'lucide-react';
 import { motion } from 'motion/react';
 import { UserRole } from '../types';
 
 export const OnboardingPage: React.FC = () => {
-  const { onboardUser } = useAuth();
+  const { user, onboardUser } = useAuth();
   
+  const [name, setName] = useState(user?.displayName || '');
   const [role, setRole] = useState<UserRole | null>(null);
   const [cnic, setCnic] = useState('');
   const [loading, setLoading] = useState(false);
@@ -35,6 +36,11 @@ export const OnboardingPage: React.FC = () => {
     e.preventDefault();
     setError(null);
 
+    if (!name.trim()) {
+      setError('Please enter your full name.');
+      return;
+    }
+
     if (!role) {
       setError('Please select your platform role.');
       return;
@@ -49,7 +55,7 @@ export const OnboardingPage: React.FC = () => {
 
     setLoading(true);
     try {
-      await onboardUser(role, cnic);
+      await onboardUser(role, cnic, name);
     } catch (err: any) {
       setError(err.message || 'Onboarding registration failed. Please try again.');
     } finally {
@@ -68,7 +74,7 @@ export const OnboardingPage: React.FC = () => {
           <div className="bg-brand-primary/10 text-brand-primary p-3 rounded-full inline-flex items-center justify-center mb-3">
             <ClipboardSignature className="h-8 w-8" />
           </div>
-          <h2 className="text-2xl font-bold tracking-tight text-brand-text">Account Onboarding</h2>
+          <h2 className="text-2xl font-bold tracking-tight text-brand-text" id="onboard-title">Account Onboarding</h2>
           <p className="text-sm text-brand-muted mt-1">
             Complete your profile identification to secure your portal access.
           </p>
@@ -80,8 +86,32 @@ export const OnboardingPage: React.FC = () => {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-6" id="onboard-form">
           
+          {/* Full Name Input */}
+          <div>
+            <label className="block text-sm font-bold text-brand-text mb-1">
+              Full Name
+            </label>
+            <p className="text-xs text-brand-muted mb-2">
+              Provide your official name for identification purposes.
+            </p>
+            <div className="relative">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-brand-muted">
+                <User className="h-5 w-5" />
+              </span>
+              <input
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="E.g., Muhammad Ali"
+                className="w-full bg-brand-bg border border-brand-border rounded-lg pl-10 pr-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none transition-all text-sm font-medium"
+                id="onboard-name-input"
+              />
+            </div>
+          </div>
+
           {/* Role Selection cards */}
           <div>
             <label className="block text-sm font-bold text-brand-text mb-3">
@@ -119,7 +149,7 @@ export const OnboardingPage: React.FC = () => {
                 <UserCheck className={`h-8 w-8 ${role === 'Participant' ? 'text-brand-primary' : 'text-brand-muted'}`} />
                 <span className="font-bold text-sm text-brand-text">Participant</span>
                 <span className="text-xs text-brand-muted">
-                  Join quiz competitions, view immediate scores, and claim verified certificates.
+                  Join quiz competitions, view immediate scores, and access live proctored arenas.
                 </span>
               </div>
 
@@ -132,7 +162,7 @@ export const OnboardingPage: React.FC = () => {
               National CNIC / Identity Number
             </label>
             <p className="text-xs text-brand-muted mb-2">
-              Required for state identification and certificate verification.
+              Required for state identification and secure verification.
             </p>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-brand-muted">

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
-import { LogOut, Sun, Moon, Eye, Award, ShieldAlert } from 'lucide-react';
+import { LogOut, Sun, Moon, Eye, ShieldAlert } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const { user, profile, logout, theme, setTheme } = useAuth();
@@ -12,7 +12,7 @@ export const Navbar: React.FC = () => {
         {/* Branding */}
         <div className="flex items-center gap-3">
           <div className="bg-brand-primary p-2 rounded-lg text-white shadow-sm flex items-center justify-center">
-            <Award className="h-6 w-6" id="nav-brand-logo" />
+            <ShieldAlert className="h-6 w-6" id="nav-brand-logo" />
           </div>
           <div>
             <span className="text-xl font-bold tracking-tight text-brand-text">ArenaHub</span>
