@@ -1,0 +1,726 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  updateDoc, 
+  query, 
+  where, 
+  arrayUnion, 
+  serverTimestamp 
+} from 'firebase/firestore';
+import { useProctoring } from '../hooks/useProctoring';
+import { Hub, Quiz, Question, Attempt } from '../types';
+import { 
+  ShieldAlert, 
+  Timer, 
+  CheckCircle, 
+  AlertOctagon, 
+  Award, 
+  ArrowRight, 
+  Lock, 
+  X, 
+  CornerDownLeft, 
+  Printer, 
+  BookOpen 
+} from 'lucide-react';
+import { motion } from 'motion/react';
+
+export const ParticipantArena: React.FC = () => {
+  const { user, profile } = useAuth();
+
+  // Search/Access States
+  const [hubIdInput, setHubIdInput] = useState('');
+  const [quizIdInput, setQuizIdInput] = useState('');
+  
+  const [activeHub, setActiveHub] = useState<Hub | null>(null);
+  const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
+  const [quizQuestions, setQuizQuestions] = useState<Question[]>([]);
+
+  // Taking States
+  const [isQuizStarted, setIsQuizStarted] = useState(false);
+  const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
+  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
+  const [answers, setAnswers] = useState<{ [qId: string]: number }>({});
+  
+  // Timer States
+  const [timeLeft, setTimeLeft] = useState(0); // in seconds
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Result States
+  const [finalAttempt, setFinalAttempt] = useState<Attempt | null>(null);
+
+  // Feedback/Loading States
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 1. Fetch Hub branding
+  const handleLoadHub = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    
+    const targetHubId = hubIdInput.trim();
+    const path = `hubs/${targetHubId}`;
+    try {
+      const docSnap = await getDoc(doc(db, 'hubs', targetHubId));
+      if (docSnap.exists()) {
+        setActiveHub(docSnap.data() as Hub);
+      } else {
+        setError('No organization Hub found with this ID code.');
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Fetch Quiz and questions
+  const handleLoadQuiz = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeHub) return;
+    setError(null);
+    setLoading(true);
+
+    const targetQuizId = quizIdInput.trim();
+    const path = `quizzes/${targetQuizId}`;
+    try {
+      const quizDoc = await getDoc(doc(db, 'quizzes', targetQuizId));
+      if (quizDoc.exists()) {
+        const quizData = quizDoc.data() as Quiz;
+        
+        // Ensure the quiz belongs to the loaded Hub
+        if (quizData.hubId !== activeHub.id) {
+          setError('This quiz code does not belong to the active Hub portal.');
+          setLoading(false);
+          return;
+        }
+
+        if (!quizData.isActive) {
+          setError('This quiz is currently in draft/inactive mode.');
+          setLoading(false);
+          return;
+        }
+
+        setActiveQuiz(quizData);
+
+        // Fetch questions pool
+        const qQuery = query(collection(db, 'questions'), where('quizId', '==', targetQuizId));
+        const questionsSnap = await getDocs(qQuery);
+        const qList: Question[] = [];
+        questionsSnap.forEach((docSnap) => {
+          qList.push(docSnap.data() as Question);
+        });
+        
+        setQuizQuestions(qList);
+        if (qList.length === 0) {
+          setError('This quiz has no active questions loaded in the pool.');
+        }
+      } else {
+        setError('Invalid quiz code. Please verify and re-try.');
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 3. Start Proctored Quiz
+  const handleStartQuiz = async () => {
+    if (!user || !profile || !activeQuiz || !activeHub || quizQuestions.length === 0) return;
+    setError(null);
+    setLoading(true);
+
+    const attemptId = 'attempt_' + Math.random().toString(36).substring(2, 11);
+    const path = `attempts/${attemptId}`;
+
+    const newAttempt: Attempt = {
+      id: attemptId,
+      hubId: activeHub.id,
+      quizId: activeQuiz.id,
+      userId: user.uid,
+      userName: profile.name,
+      userCnic: profile.cnic,
+      userEmail: user.email || '',
+      score: 0,
+      timeSpentSeconds: 0,
+      passed: false,
+      cheatFlags: [],
+      status: 'In Progress',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    try {
+      // 1. Write the initial attempt record to Firestore
+      await setDoc(doc(db, 'attempts', attemptId), {
+        ...newAttempt,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      setActiveAttemptId(attemptId);
+      setTimeLeft(activeQuiz.timeLimit * 60);
+      setIsQuizStarted(true);
+      setCurrentQuestionIdx(0);
+      setAnswers({});
+    } catch (err: any) {
+      setError(err.message || 'Failed to initialize proctored session.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 4. Timer effect
+  useEffect(() => {
+    if (!isQuizStarted || timeLeft <= 0) return;
+
+    timerRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timerRef.current!);
+          // Auto submit on time-out
+          handleSubmitQuiz('Timer Expired');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isQuizStarted, timeLeft]);
+
+  // 5. Proctoring Logger Callbacks
+  const logCheatFlag = async (flag: string) => {
+    if (!activeAttemptId) return;
+    const path = `attempts/${activeAttemptId}`;
+    try {
+      await updateDoc(doc(db, 'attempts', activeAttemptId), {
+        cheatFlags: arrayUnion(flag),
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      console.error('Failed to log proctoring alert to Firestore:', err);
+    }
+  };
+
+  const handleProctoringAutoSubmit = async (reason: string) => {
+    alert(`PROCTORING LOCKOUT: ${reason}. Your quiz has been auto-submitted.`);
+    await handleSubmitQuiz('Locked Out', true);
+  };
+
+  // Mount strict proctoring hook
+  useProctoring({
+    active: isQuizStarted,
+    onCheatFlag: logCheatFlag,
+    onAutoSubmit: handleProctoringAutoSubmit
+  });
+
+  // 6. Submit Quiz Handler
+  const handleSubmitQuiz = async (reason: 'Submitted' | 'Timer Expired' | 'Locked Out', forceLockout = false) => {
+    if (!activeAttemptId || !activeQuiz || quizQuestions.length === 0) return;
+    setLoading(true);
+    
+    // Clear timer
+    if (timerRef.current) clearInterval(timerRef.current);
+
+    // Compute raw score
+    let correctCount = 0;
+    quizQuestions.forEach((q) => {
+      const selected = answers[q.id];
+      if (selected !== undefined && selected === q.correctOption) {
+        correctCount++;
+      }
+    });
+
+    const finalScore = correctCount;
+    const finalPercentage = (correctCount / quizQuestions.length) * 100;
+    const isPassed = finalPercentage >= activeQuiz.passPercentage;
+
+    const finalStatus = forceLockout ? 'Locked Out' : 'Submitted';
+    const secondsConsumed = (activeQuiz.timeLimit * 60) - timeLeft;
+
+    const path = `attempts/${activeAttemptId}`;
+    try {
+      const attemptDocRef = doc(db, 'attempts', activeAttemptId);
+      
+      // Fetch latest cheat flags before saving final copy
+      const snapDoc = await getDoc(attemptDocRef);
+      const currentFlags = snapDoc.exists() ? (snapDoc.data() as Attempt).cheatFlags : [];
+
+      const finalAttemptData: Attempt = {
+        id: activeAttemptId,
+        hubId: activeHub?.id || '',
+        quizId: activeQuiz.id,
+        userId: user?.uid || '',
+        userName: profile?.name || '',
+        userCnic: profile?.cnic || '',
+        userEmail: user?.email || '',
+        score: finalScore,
+        timeSpentSeconds: secondsConsumed,
+        passed: isPassed,
+        cheatFlags: currentFlags,
+        status: finalStatus,
+        createdAt: snapDoc.exists() ? (snapDoc.data() as Attempt).createdAt : new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      // Write final attempt evaluation
+      await updateDoc(attemptDocRef, {
+        score: finalScore,
+        timeSpentSeconds: secondsConsumed,
+        passed: isPassed,
+        status: finalStatus,
+        updatedAt: serverTimestamp()
+      });
+
+      setFinalAttempt(finalAttemptData);
+      setIsQuizStarted(false);
+      setActiveAttemptId(null);
+    } catch (err: any) {
+      setError(err.message || 'Submission evaluation failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 7. Dynamic Style Variables for Tenant branding
+  const tenantColors = activeHub ? {
+    '--primary': activeHub.primaryColor,
+    '--secondary': activeHub.secondaryColor,
+  } as React.CSSProperties : {};
+
+  // Printable digital certificate trigger
+  const handlePrintCertificate = () => {
+    window.print();
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
+      
+      {/* 1. PORTAL ACCESS (HUB ENTRY SCREEN) */}
+      {!activeHub && !finalAttempt && (
+        <motion.div 
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-brand-card border border-brand-border rounded-2xl p-8 max-w-lg mx-auto shadow-lg"
+        >
+          <div className="text-center mb-6">
+            <div className="bg-brand-primary/10 text-brand-primary p-3 rounded-full inline-flex items-center justify-center mb-3">
+              <Lock className="h-8 w-8" />
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight text-brand-text">Enter Participant Arena</h2>
+            <p className="text-xs text-brand-muted mt-1">
+              Input your organization's custom Hub ID to load branding configurations.
+            </p>
+          </div>
+
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg text-red-800 text-sm font-medium">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleLoadHub} className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-brand-text mb-1">Organization Hub ID</label>
+              <input
+                type="text"
+                required
+                value={hubIdInput}
+                onChange={(e) => setHubIdInput(e.target.value)}
+                placeholder="Paste Hub ID Code here"
+                className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none text-sm font-mono text-center font-semibold"
+                id="hub-search-input"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-brand-primary text-white py-2.5 rounded-lg font-bold text-sm tracking-wide hover:bg-opacity-95 transition-all flex items-center justify-center gap-1 cursor-pointer"
+              id="hub-search-submit"
+            >
+              Load Custom Hub <ArrowRight className="h-4 w-4" />
+            </button>
+          </form>
+        </motion.div>
+      )}
+
+      {/* 2. QUIZ CODE ENTRY (INSIDE BRANDED HUB) */}
+      {activeHub && !activeQuiz && !finalAttempt && (
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-brand-card border border-brand-border rounded-2xl p-8 max-w-lg mx-auto shadow-lg"
+        >
+          {/* Branded Hub Header */}
+          <div className="text-center mb-6 pb-6 border-b border-brand-border">
+            <img 
+              src={activeHub.logoUrl} 
+              alt="Logo" 
+              className="w-16 h-16 rounded-xl mx-auto mb-3 object-contain border bg-white p-1" 
+              referrerPolicy="no-referrer"
+            />
+            <h2 className="text-2xl font-black text-brand-text">{activeHub.hubName}</h2>
+            <span className="text-2xs font-extrabold uppercase tracking-widest text-brand-muted block mt-1" style={{ color: 'var(--primary)' }}>
+              Branded Tenant Hub
+            </span>
+            <button 
+              onClick={() => { setActiveHub(null); setError(null); }}
+              className="text-2xs text-brand-primary hover:underline font-bold mt-2 cursor-pointer inline-flex items-center gap-1"
+            >
+              <CornerDownLeft className="h-3 w-3" /> Connect different Hub
+            </button>
+          </div>
+
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg text-red-800 text-sm font-medium">
+              {error}
+            </div>
+          )}
+
+          {/* Load Quiz code */}
+          <form onSubmit={handleLoadQuiz} className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-brand-text mb-1">Enter Quiz Code</label>
+              <p className="text-xs text-brand-muted mb-2">Input the code provided by your organization's supervisor.</p>
+              <input
+                type="text"
+                required
+                value={quizIdInput}
+                onChange={(e) => setQuizIdInput(e.target.value)}
+                placeholder="E.g., quiz_x9fs8w"
+                className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none text-sm font-mono text-center font-semibold"
+                id="quiz-search-input"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full text-white py-2.5 rounded-lg font-bold text-sm tracking-wide hover:bg-opacity-95 transition-all flex items-center justify-center gap-1 cursor-pointer"
+              style={{ backgroundColor: 'var(--primary)' }}
+              id="quiz-search-submit"
+            >
+              Verify Quiz Code <ArrowRight className="h-4 w-4" />
+            </button>
+          </form>
+        </motion.div>
+      )}
+
+      {/* 3. CONFIRM START (PROCTORING DISCLOSURES) */}
+      {activeHub && activeQuiz && !isQuizStarted && !finalAttempt && (
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-brand-card border border-brand-border rounded-2xl p-8 max-w-xl mx-auto shadow-lg"
+        >
+          {/* Branded Hub Header */}
+          <div className="text-center mb-6 pb-6 border-b border-brand-border">
+            <img 
+              src={activeHub.logoUrl} 
+              alt="Logo" 
+              className="w-12 h-12 rounded-lg mx-auto mb-2 object-contain border bg-white p-1" 
+              referrerPolicy="no-referrer"
+            />
+            <h2 className="text-xl font-bold text-brand-text">{activeQuiz.title}</h2>
+            <p className="text-xs text-brand-muted mt-1">{activeHub.hubName} micro-portal</p>
+          </div>
+
+          {/* Disclosures list */}
+          <div className="bg-red-50 border border-red-200 rounded-xl p-5 mb-6 text-red-900">
+            <h3 className="text-sm font-extrabold flex items-center gap-1.5 mb-2 uppercase tracking-wide">
+              <ShieldAlert className="h-5 w-5 text-red-600 animate-pulse" />
+              Proctored Environment Active!
+            </h3>
+            <ul className="text-xs space-y-2 list-disc list-inside">
+              <li><strong>Fullscreen Lock:</strong> The quiz runs in fullscreen. Pressing Esc once alerts, pressing Esc a second time auto-submits.</li>
+              <li><strong>Tab Change Lockdown:</strong> Do NOT navigate away from this screen. Switching tabs or opening other windows is instantly logged to Firestore.</li>
+              <li><strong>Keyboard/Mouse Limits:</strong> Clipboard Copy/Paste and Right-clicks are blocked.</li>
+              <li><strong>Verified Records:</strong> Attempts are digitally locked with your CNIC {profile?.cnic}.</li>
+            </ul>
+          </div>
+
+          <div className="flex justify-between items-center bg-brand-bg p-4 rounded-xl mb-6 text-xs text-brand-muted font-bold uppercase tracking-wider">
+            <span>Timer limit: {activeQuiz.timeLimit} Minutes</span>
+            <span>Target Score: {activeQuiz.passPercentage}% to Pass</span>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => { setActiveQuiz(null); setQuizQuestions([]); }}
+              className="flex-1 border border-brand-border text-brand-text py-2.5 rounded-lg text-sm font-bold hover:bg-brand-bg transition-all cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleStartQuiz}
+              disabled={loading}
+              className="flex-1 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-opacity-95 transition-all cursor-pointer"
+              style={{ backgroundColor: 'var(--primary)' }}
+              id="start-quiz-btn"
+            >
+              Enter Fullscreen & Start
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      {/* 4. ACTIVE QUIZ TAKE ROOM (PROCTORING ON) */}
+      {isQuizStarted && activeQuiz && quizQuestions.length > 0 && (
+        <div className="space-y-6">
+          
+          {/* Floating Proctored Header */}
+          <div className="bg-brand-card border border-brand-border rounded-2xl p-5 shadow-sm flex items-center justify-between gap-4 sticky top-4 z-50 transition-all">
+            <div className="flex items-center gap-3">
+              <div className="bg-red-100 p-2 rounded-lg text-red-600 animate-pulse flex items-center justify-center">
+                <ShieldAlert className="h-5 w-5" />
+              </div>
+              <div>
+                <span className="text-2xs text-brand-muted font-bold uppercase tracking-widest block">Proctored Session</span>
+                <span className="text-sm font-black text-brand-text truncate max-w-[200px] md:max-w-xs block">{activeQuiz.title}</span>
+              </div>
+            </div>
+
+            {/* Timer widget */}
+            <div className="bg-red-50 border border-red-200 text-red-800 font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs animate-bounce">
+              <Timer className="h-5 w-5" />
+              {Math.floor(timeLeft / 60)}:{(timeLeft % 60) < 10 ? '0' : ''}{timeLeft % 60}
+            </div>
+          </div>
+
+          {/* Progress indicators */}
+          <div className="bg-brand-card border border-brand-border rounded-2xl p-6 shadow-xs">
+            <div className="flex justify-between text-xs text-brand-muted font-bold uppercase tracking-wider mb-2">
+              <span>Question {currentQuestionIdx + 1} of {quizQuestions.length}</span>
+              <span>Progress: {Math.round(((currentQuestionIdx) / quizQuestions.length) * 100)}%</span>
+            </div>
+            
+            <div className="w-full h-2 bg-brand-bg rounded-full overflow-hidden border border-brand-border">
+              <div 
+                className="h-full transition-all duration-300" 
+                style={{ 
+                  backgroundColor: 'var(--primary)',
+                  width: `${((currentQuestionIdx + 1) / quizQuestions.length) * 100}%` 
+                }}
+              ></div>
+            </div>
+          </div>
+
+          {/* Question Card */}
+          <div className="bg-brand-card border border-brand-border rounded-2xl p-8 shadow-xs">
+            <h3 className="text-lg font-extrabold text-brand-text mb-6">
+              {quizQuestions[currentQuestionIdx].text}
+            </h3>
+
+            {/* Answer Options */}
+            <div className="space-y-3.5">
+              {quizQuestions[currentQuestionIdx].options.map((option, idx) => {
+                const qId = quizQuestions[currentQuestionIdx].id;
+                const isSelected = answers[qId] === idx;
+
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => {
+                      setAnswers((prev) => ({
+                        ...prev,
+                        [qId]: idx
+                      }));
+                    }}
+                    className={`border-2 rounded-xl p-4 cursor-pointer transition-all flex items-center justify-between ${
+                      isSelected
+                        ? 'border-brand-primary bg-brand-primary/5 shadow-xs'
+                        : 'border-brand-border hover:border-brand-primary/50 hover:bg-brand-bg'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className={`w-6 h-6 rounded-full border flex items-center justify-center font-bold text-xs ${
+                        isSelected 
+                          ? 'bg-brand-primary text-white border-brand-primary' 
+                          : 'bg-brand-bg border-brand-border text-brand-muted'
+                      }`}>
+                        {String.fromCharCode(65 + idx)}
+                      </span>
+                      <span className="text-sm font-semibold text-brand-text">{option}</span>
+                    </div>
+
+                    {isSelected && <CheckCircle className="h-5 w-5 text-brand-primary" />}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Navigation controller */}
+          <div className="flex justify-between items-center gap-4">
+            <button
+              onClick={() => setCurrentQuestionIdx((p) => Math.max(0, p - 1))}
+              disabled={currentQuestionIdx === 0}
+              className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg disabled:opacity-30 cursor-pointer transition-all"
+            >
+              Previous
+            </button>
+
+            {currentQuestionIdx < quizQuestions.length - 1 ? (
+              <button
+                onClick={() => setCurrentQuestionIdx((p) => p + 1)}
+                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 cursor-pointer transition-all"
+                style={{ backgroundColor: 'var(--primary)' }}
+              >
+                Next Question
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (window.confirm('Are you ready to submit your exam?')) {
+                    handleSubmitQuiz('Submitted');
+                  }
+                }}
+                disabled={loading}
+                className="px-8 py-2.5 rounded-lg text-white font-extrabold text-sm hover:bg-opacity-95 shadow-xs cursor-pointer transition-all"
+                style={{ backgroundColor: 'var(--accent)' }}
+                id="submit-quiz-btn"
+              >
+                {loading ? 'Submitting Answers...' : 'Submit Quiz Exam'}
+              </button>
+            )}
+          </div>
+
+        </div>
+      )}
+
+      {/* 5. SECURE DIGITAL CERTIFICATE & SCORES ROOM */}
+      {finalAttempt && activeHub && activeQuiz && (
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="space-y-8"
+        >
+          {/* Printable Container wrapper */}
+          <div className="bg-brand-card border border-brand-border rounded-2xl p-8 shadow-lg max-w-2xl mx-auto" id="certificate-print-area">
+            
+            {/* Score Stats */}
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center p-4 bg-brand-bg rounded-full border mb-4">
+                {finalAttempt.passed ? (
+                  <Award className="h-12 w-12 text-yellow-500" />
+                ) : (
+                  <AlertOctagon className="h-12 w-12 text-red-500" />
+                )}
+              </div>
+              <h2 className="text-2xl font-black text-brand-text">
+                {finalAttempt.passed ? 'Congratulations, you passed!' : 'Quiz Attempt Completed'}
+              </h2>
+              <p className="text-sm text-brand-muted mt-1">
+                Evaluation results for {activeQuiz.title}
+              </p>
+            </div>
+
+            {/* Score statistics grid */}
+            <div className="grid grid-cols-2 gap-4 bg-brand-bg border border-brand-border rounded-xl p-4 mb-8 text-center">
+              <div>
+                <span className="text-3xs font-extrabold text-brand-muted uppercase tracking-wider block">Raw score</span>
+                <span className="text-xl font-black text-brand-text">{finalAttempt.score} Points</span>
+              </div>
+              <div>
+                <span className="text-3xs font-extrabold text-brand-muted uppercase tracking-wider block">Pass target</span>
+                <span className="text-xl font-black text-brand-text">{activeQuiz.passPercentage}% Score</span>
+              </div>
+            </div>
+
+            {/* VERIFIED DIGITAL CERTIFICATE */}
+            {finalAttempt.passed && (
+              <div className="border-4 border-double border-yellow-600 rounded-xl p-6 bg-amber-50/20 text-center relative overflow-hidden colorblind-pattern">
+                {/* Visual stamp background */}
+                <div className="absolute -right-8 -bottom-8 text-yellow-600/10 rotate-12">
+                  <Award className="w-48 h-48" />
+                </div>
+
+                <div className="relative space-y-4">
+                  <span className="text-2xs font-bold text-yellow-700 tracking-widest uppercase block">
+                    Verified Digital Certificate
+                  </span>
+                  
+                  <h3 className="text-3xl font-serif text-slate-800 tracking-tight font-semibold">
+                    Certificate of Achievement
+                  </h3>
+                  
+                  <p className="text-xs text-slate-500 italic max-w-md mx-auto">
+                    This document verifies that the recipient has completed the interactive assessment in a proctored, multi-tenant academic environment.
+                  </p>
+
+                  <div className="py-4">
+                    <span className="text-2xs font-bold text-slate-400 uppercase tracking-wide block">Proudly Awarded To</span>
+                    <span className="text-xl font-extrabold text-slate-900 border-b-2 border-slate-900 px-4 inline-block tracking-tight mt-1">
+                      {finalAttempt.userName}
+                    </span>
+                    <span className="text-xs font-mono text-slate-500 block mt-1">CNIC: {finalAttempt.userCnic}</span>
+                  </div>
+
+                  <p className="text-xs text-slate-700 max-w-sm mx-auto font-semibold">
+                    Completed the exam <strong className="text-yellow-700 font-extrabold">"{activeQuiz.title}"</strong> with score {finalAttempt.score} points on behalf of <strong className="text-slate-900">{activeHub.hubName}</strong>.
+                  </p>
+
+                  <div className="pt-6 border-t border-yellow-600/30 grid grid-cols-2 gap-4 text-left text-2xs text-slate-500">
+                    <div>
+                      <span className="font-bold block">Assessment date:</span>
+                      <span>{new Date(finalAttempt.updatedAt).toLocaleDateString()}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-bold block">Verification Code:</span>
+                      <span className="font-mono">{finalAttempt.id}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!finalAttempt.passed && (
+              <div className="border border-red-200 rounded-xl p-5 bg-red-50/40 text-center text-red-900">
+                <p className="text-xs">
+                  Your final score was below the pass threshold of <strong>{activeQuiz.passPercentage}%</strong>. Please contact your organization hub supervisor {activeHub.hubName} to re-schedule this competitive quiz.
+                </p>
+              </div>
+            )}
+
+          </div>
+
+          {/* Actions controllers */}
+          <div className="flex gap-4 justify-center">
+            <button
+              onClick={() => {
+                setFinalAttempt(null);
+                setActiveQuiz(null);
+                setActiveHub(null);
+                setQuizIdInput('');
+                setHubIdInput('');
+              }}
+              className="bg-brand-card border border-brand-border text-brand-text px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-brand-bg transition-all cursor-pointer flex items-center gap-1.5"
+            >
+              Exit Arena
+            </button>
+            {finalAttempt.passed && (
+              <button
+                onClick={handlePrintCertificate}
+                className="bg-yellow-600 hover:bg-yellow-700 text-white px-6 py-2.5 rounded-lg text-sm font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+              >
+                <Printer className="h-4 w-4" /> Print / Save Certificate
+              </button>
+            )}
+          </div>
+        </motion.div>
+      )}
+
+    </div>
+  );
+};

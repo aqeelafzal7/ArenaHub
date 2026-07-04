@@ -1,0 +1,122 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role and onboarding CNIC information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "cnic": { "type": "string" },
+        "role": { "type": "string", "enum": ["Organizer", "Participant"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "name", "cnic", "role", "createdAt"]
+    },
+    "Hub": {
+      "title": "Hub",
+      "description": "A multi-tenant Hub managed by an Organizer.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "hubName": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "primaryColor": { "type": "string" },
+        "secondaryColor": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "ownerUid", "hubName", "logoUrl", "primaryColor", "secondaryColor", "createdAt"]
+    },
+    "Quiz": {
+      "title": "Quiz",
+      "description": "A quiz inside a tenant hub.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "hubId": { "type": "string" },
+        "title": { "type": "string" },
+        "timeLimit": { "type": "number" },
+        "passPercentage": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "isLiveCompetition": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "hubId", "title", "timeLimit", "passPercentage", "isActive", "isLiveCompetition", "createdAt"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "A single multiple choice question inside a quiz.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "quizId": { "type": "string" },
+        "text": { "type": "string" },
+        "options": { "type": "array" },
+        "correctOption": { "type": "number" },
+        "imageUrl": { "type": "string" }
+      },
+      "required": ["id", "quizId", "text", "options", "correctOption"]
+    },
+    "Attempt": {
+      "title": "Attempt",
+      "description": "A participant's attempt at a specific quiz, with progress tracking and cheat logs.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "hubId": { "type": "string" },
+        "quizId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userCnic": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "score": { "type": "number" },
+        "timeSpentSeconds": { "type": "number" },
+        "passed": { "type": "boolean" },
+        "cheatFlags": { "type": "array" },
+        "status": { "type": "string", "enum": ["In Progress", "Submitted", "Locked Out"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": [
+        "id",
+        "hubId",
+        "quizId",
+        "userId",
+        "userName",
+        "userCnic",
+        "userEmail",
+        "score",
+        "timeSpentSeconds",
+        "passed",
+        "cheatFlags",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "Profiles of registered organizers and participants."
+    },
+    "hubs": {
+      "schema": "Hub",
+      "description": "Organization and club micro-portals (hubs)."
+    },
+    "quizzes": {
+      "schema": "Quiz",
+      "description": "Quizzes created under a specific hub."
+    },
+    "questions": {
+      "schema": "Question",
+      "description": "Questions for each quiz."
+    },
+    "attempts": {
+      "schema": "Attempt",
+      "description": "User scores, statuses, and proctoring logs for a quiz."
+    }
+  }
+}

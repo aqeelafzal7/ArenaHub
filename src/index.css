@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-primary: var(--primary);
+  --color-brand-secondary: var(--secondary);
+  --color-brand-bg: var(--bg);
+  --color-brand-text: var(--text);
+  --color-brand-card: var(--card);
+  --color-brand-border: var(--border);
+  --color-brand-accent: var(--accent);
+  --color-brand-muted: var(--muted);
+}
+
+:root {
+  --primary: #2563eb;
+  --secondary: #4f46e5;
+  --bg: #f8fafc;
+  --text: #0f172a;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --accent: #10b981;
+  --muted: #64748b;
+}
+
+.dark {
+  --primary: #3b82f6;
+  --secondary: #6366f1;
+  --bg: #0f172a;
+  --text: #f8fafc;
+  --card: #1e293b;
+  --border: #334155;
+  --accent: #34d399;
+  --muted: #94a3b8;
+}
+
+.colorblind {
+  --primary: #e69f00; /* High contrast colorblind-safe orange */
+  --secondary: #0072b2; /* High contrast safe blue */
+  --bg: #ffffff;
+  --text: #111111;
+  --card: #f8fafc;
+  --border: #111111; /* Strong borders for shape separation */
+  --accent: #cc79a7; /* Pink/magenta contrast anchor */
+  --muted: #444444;
+}
+
+/* Custom Accessibility Pattern overlay for colorblind data visualization */
+.colorblind-pattern {
+  background-image: repeating-linear-gradient(45deg, rgba(0, 0, 0, 0.05) 0px, rgba(0, 0, 0, 0.05) 2px, transparent 2px, transparent 10px);
+}
+
+/* Focus and touch styles for accessibility */
+button:focus-visible, a:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
