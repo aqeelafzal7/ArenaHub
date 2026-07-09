@@ -194,13 +194,17 @@ export const OrganizerDashboard: React.FC = () => {
 
   // Sync Live war room listener when quiz selection updates
   useEffect(() => {
-    if (!activeLiveQuizId) {
+    if (!activeLiveQuizId || !user) {
       setLiveAttempts([]);
       return;
     }
     
     const path = `attempts for quiz ${activeLiveQuizId}`;
-    const q = query(collection(db, 'attempts'), where('quizId', '==', activeLiveQuizId));
+    const q = query(
+      collection(db, 'attempts'),
+      where('hubId', '==', user.uid),
+      where('quizId', '==', activeLiveQuizId)
+    );
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const attemptsList: Attempt[] = [];
@@ -219,7 +223,7 @@ export const OrganizerDashboard: React.FC = () => {
     });
 
     return () => unsubscribe();
-  }, [activeLiveQuizId]);
+  }, [activeLiveQuizId, user]);
 
   // 2. Hub Branding Form Handlers
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {

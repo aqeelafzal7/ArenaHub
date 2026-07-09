@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 interface UseProctoringProps {
   active: boolean;
   onCheatFlag: (flag: string) => void;
@@ -14,21 +16,9 @@ export function useProctoring({ active, onCheatFlag, onAutoSubmit, onShowWarning
   useEffect(() => {
     if (!active) return;
 
-    // 1. Enter Fullscreen on Start
-    const enterFullscreen = async () => {
-      try {
-        if (!document.fullscreenElement) {
-          await document.documentElement.requestFullscreen();
-        }
-      } catch (err) {
-        console.warn('Failed to enter fullscreen mode automatically:', err);
-        onCheatFlag('Failed to auto-enter Fullscreen (Permission Blocked)');
-      }
-    };
+    let timeoutId: NodeJS.Timeout | null = null;
 
-    enterFullscreen();
-
-    // 2. Fullscreen Change Listener
+    // Fullscreen Change Listener
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement && !isSubmitting.current) {
         exitFullscreenCount.current += 1;
@@ -50,6 +40,25 @@ export function useProctoring({ active, onCheatFlag, onAutoSubmit, onShowWarning
         }
       }
     };
+
+    // If not mobile, initialize fullscreen logic after a grace period of 2500ms
+    if (!isMobile) {
+      timeoutId = setTimeout(() => {
+        const enterFullscreen = async () => {
+          try {
+            if (!document.fullscreenElement) {
+              await document.documentElement.requestFullscreen();
+            }
+          } catch (err) {
+            console.warn('Failed to enter fullscreen mode automatically:', err);
+            onCheatFlag('Failed to auto-enter Fullscreen (Permission Blocked)');
+          }
+        };
+
+        enterFullscreen();
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+      }, 2500);
+    }
 
     // 3. Visibility Change Listener (Tab switching)
     const handleVisibilityChange = () => {
@@ -103,8 +112,7 @@ export function useProctoring({ active, onCheatFlag, onAutoSubmit, onShowWarning
       onCheatFlag(`Attempted Right Click (Context Menu Disabled) at ${timestamp}`);
     };
 
-    // Register all listeners
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    // Register other listeners immediately
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
     document.addEventListener('selectstart', handleSelectStart);
@@ -112,16 +120,20 @@ export function useProctoring({ active, onCheatFlag, onAutoSubmit, onShowWarning
     document.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
-      // Cleanup
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (!isMobile) {
+        document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('selectstart', handleSelectStart);
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('contextmenu', handleContextMenu);
 
-      // Exit Fullscreen when unmounting
-      if (document.fullscreenElement) {
+      // Exit Fullscreen when unmounting (only if not mobile)
+      if (!isMobile && document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
       }
     };

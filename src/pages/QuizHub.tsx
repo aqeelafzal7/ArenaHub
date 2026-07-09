@@ -28,6 +28,8 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 export const QuizHub: React.FC = () => {
   const { user, profile, theme } = useAuth();
   const isColorblind = theme === 'colorblind';
@@ -207,7 +209,7 @@ export const QuizHub: React.FC = () => {
 
     // Request fullscreen synchronously under the user event gesture to bypass browser block
     try {
-      if (!document.fullscreenElement) {
+      if (!isMobile && !document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
       }
     } catch (fsErr) {
@@ -694,7 +696,7 @@ export const QuizHub: React.FC = () => {
                   style={{ backgroundColor: 'var(--primary)' }}
                   id="start-quiz-btn"
                 >
-                  Enter Fullscreen & Start
+                  {isMobile ? 'Start Proctored Exam' : 'Enter Fullscreen & Start'}
                 </button>
               </div>
             </>
