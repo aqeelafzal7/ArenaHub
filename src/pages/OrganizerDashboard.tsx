@@ -84,6 +84,7 @@ export const OrganizerDashboard: React.FC = () => {
   const [allowedCnicsInput, setAllowedCnicsInput] = useState<string>('');
   const [openAt, setOpenAt] = useState<string>('');
   const [closeAt, setCloseAt] = useState<string>('');
+  const [postSubmissionText, setPostSubmissionText] = useState('');
 
   // Manual Question Form States
   const [qText, setQText] = useState('');
@@ -170,6 +171,7 @@ export const OrganizerDashboard: React.FC = () => {
       setAllowedCnicsInput(selectedQuiz.allowedCnics ? selectedQuiz.allowedCnics.join(', ') : '');
       setOpenAt(formatIsoForDatetimeLocal(selectedQuiz.openAt));
       setCloseAt(formatIsoForDatetimeLocal(selectedQuiz.closeAt));
+      setPostSubmissionText(selectedQuiz.postSubmissionText ?? '');
       
       // Fetch selected quiz questions
       const fetchQuestions = async () => {
@@ -292,13 +294,15 @@ export const OrganizerDashboard: React.FC = () => {
       totalAttemptsAllowed: 1,
       allowedCnics: [],
       openAt: '',
-      closeAt: ''
+      closeAt: '',
+      postSubmissionText: postSubmissionText.trim()
     };
 
     try {
       await setDoc(doc(db, 'quizzes', quizId), newQuiz);
       setQuizzes((prev) => [newQuiz, ...prev]);
       setQuizTitle('');
+      setPostSubmissionText('');
       setSelectedQuiz(newQuiz);
     } catch (err: any) {
       setError(err.message || 'Failed to construct a new quiz instance');
@@ -322,7 +326,8 @@ export const OrganizerDashboard: React.FC = () => {
       totalAttemptsAllowed: Number(totalAttemptsAllowed),
       allowedCnics: parsedCnics,
       openAt: openAt ? new Date(openAt).toISOString() : '',
-      closeAt: closeAt ? new Date(closeAt).toISOString() : ''
+      closeAt: closeAt ? new Date(closeAt).toISOString() : '',
+      postSubmissionText: postSubmissionText.trim()
     };
 
     try {
@@ -943,6 +948,18 @@ export const OrganizerDashboard: React.FC = () => {
                     </div>
                   </div>
 
+                  <div>
+                    <label className="block text-xs font-bold text-brand-text mb-1">Post-Submission Message (Optional)</label>
+                    <textarea
+                      value={postSubmissionText}
+                      onChange={(e) => setPostSubmissionText(e.target.value)}
+                      placeholder="E.g., Your quiz has been submitted successfully. Custom results will be announced via email."
+                      rows={2}
+                      className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/30 outline-none text-xs"
+                      id="quiz-post-submission-text-input"
+                    />
+                  </div>
+
                   <button
                     type="submit"
                     disabled={quizLoading}
@@ -1120,6 +1137,19 @@ export const OrganizerDashboard: React.FC = () => {
                           />
                           <p className="text-[9px] text-brand-muted mt-1">Access shuts down automatically after this instant.</p>
                         </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-brand-text mb-1">Post-Submission Message (Optional)</label>
+                        <textarea
+                          value={postSubmissionText}
+                          onChange={(e) => setPostSubmissionText(e.target.value)}
+                          placeholder="E.g., Your quiz has been submitted successfully. Custom results will be announced via email."
+                          rows={2}
+                          className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text placeholder-brand-muted focus:ring-1 focus:ring-brand-primary/30 outline-none text-xs"
+                          id="edit-quiz-post-submission-text-input"
+                        />
+                        <p className="text-[9px] text-brand-muted mt-1">This message will be shown to participants on the blind result screen after submission.</p>
                       </div>
 
                       <button

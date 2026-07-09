@@ -834,84 +834,50 @@ export const QuizHub: React.FC = () => {
         >
           <div className="bg-brand-card border border-brand-border rounded-2xl p-8 shadow-lg max-w-2xl mx-auto">
             
-            {/* Score Stats Header */}
+            {/* Success Header */}
             <div className="text-center mb-8">
               <div className={`inline-flex items-center justify-center p-4 rounded-full border mb-4 ${
                 isColorblind 
                   ? 'bg-blue-50 border-blue-200 text-blue-700' 
                   : 'bg-brand-bg border-brand-border'
               }`}>
-                {finalAttempt.passed ? (
-                  isColorblind ? (
-                    <span className="text-lg font-bold font-mono text-blue-700">[PASSED]</span>
-                  ) : (
-                    <CheckCircle className="h-12 w-12 text-green-500" />
-                  )
-                ) : (
-                  isColorblind ? (
-                    <span className="text-lg font-bold font-mono text-orange-600">[FAILED]</span>
-                  ) : (
-                    <AlertOctagon className="h-12 w-12 text-red-500" />
-                  )
-                )}
+                <CheckCircle className="h-12 w-12 text-brand-primary" />
               </div>
               <h2 className="text-2xl font-black text-brand-text">
-                {finalAttempt.passed 
-                  ? `${isColorblind ? '[PASSED] ' : ''}Congratulations, you passed!` 
-                  : `${isColorblind ? '[FAILED] ' : ''}Quiz Attempt Completed`
-                }
+                Quiz Attempt Completed
               </h2>
               <p className="text-sm text-brand-muted mt-1">
-                Evaluation results for {activeQuiz.title}
+                Evaluation submitted for {activeQuiz.title}
               </p>
             </div>
 
-            {/* Score statistics grid */}
-            <div className="grid grid-cols-2 gap-4 bg-brand-bg border border-brand-border rounded-xl p-4 mb-8 text-center">
-              <div>
-                <span className="text-3xs font-extrabold text-brand-muted uppercase tracking-wider block">Raw Score Achieved</span>
-                <span className="text-xl font-black text-brand-text">{finalAttempt.score} Points</span>
-              </div>
-              <div>
-                <span className="text-3xs font-extrabold text-brand-muted uppercase tracking-wider block">Passing Threshold</span>
-                <span className="text-xl font-black text-brand-text">{activeQuiz.passPercentage}% Score</span>
-              </div>
+            {/* Custom Admin Announcement Text */}
+            <div className="border border-brand-border rounded-xl p-6 bg-brand-bg/50 mb-8 text-center">
+              <p className="text-sm text-brand-text leading-relaxed whitespace-pre-line">
+                {activeQuiz.postSubmissionText && activeQuiz.postSubmissionText.trim() !== ''
+                  ? activeQuiz.postSubmissionText
+                  : "Your quiz has been submitted successfully. Results will be announced very soon."
+                }
+              </p>
             </div>
 
             {/* SECURE SUBMISSION REPORT & ARCHIVE STAMP */}
-            {finalAttempt.passed ? (
-              <div className={`border rounded-xl p-6 text-center ${
-                isColorblind 
-                  ? 'border-blue-500 bg-blue-50/10 text-blue-900' 
-                  : 'border-green-200 bg-green-50/20 text-green-900'
-              }`}>
-                <h3 className="text-base font-black mb-2 flex items-center justify-center gap-1">
-                  {isColorblind ? '[PASSED] ASSESSMENT VERIFIED' : 'Assessment Verified & Saved Successfully'}
-                </h3>
-                <p className="text-xs mb-4">
-                  Your competitive examination has been verified under strict proctoring guidelines. The record has been permanently archived in the organization database.
-                </p>
-                
-                <div className="bg-brand-bg rounded-lg p-4 text-left text-xs font-mono space-y-1.5 border border-brand-border">
-                  <div><span className="text-brand-muted font-bold uppercase">Candidate:</span> {finalAttempt.userName}</div>
-                  <div><span className="text-brand-muted font-bold uppercase">CNIC Number:</span> {finalAttempt.userCnic}</div>
-                  <div><span className="text-brand-muted font-bold uppercase">Email ID:</span> {finalAttempt.userEmail}</div>
-                  <div><span className="text-brand-muted font-bold uppercase">Attempt Signature:</span> {finalAttempt.id}</div>
-                  <div><span className="text-brand-muted font-bold uppercase">Archived Stamp:</span> {new Date(finalAttempt.updatedAt).toLocaleString()}</div>
-                </div>
+            <div className="border border-brand-border rounded-xl p-6 text-center bg-brand-bg">
+              <h3 className="text-sm font-bold mb-3 text-brand-text flex items-center justify-center gap-1.5">
+                Assessment Verified & Saved Successfully
+              </h3>
+              <p className="text-xs text-brand-muted mb-4">
+                Your examination has been verified under strict proctoring guidelines. The record has been permanently archived in the organization database.
+              </p>
+              
+              <div className="bg-brand-card rounded-lg p-4 text-left text-xs font-mono space-y-1.5 border border-brand-border">
+                <div><span className="text-brand-muted font-bold uppercase">Candidate:</span> {finalAttempt.userName}</div>
+                <div><span className="text-brand-muted font-bold uppercase">CNIC Number:</span> {finalAttempt.userCnic}</div>
+                <div><span className="text-brand-muted font-bold uppercase">Email ID:</span> {finalAttempt.userEmail}</div>
+                <div><span className="text-brand-muted font-bold uppercase">Attempt Signature:</span> {finalAttempt.id}</div>
+                <div><span className="text-brand-muted font-bold uppercase">Archived Stamp:</span> {new Date(finalAttempt.updatedAt).toLocaleString()}</div>
               </div>
-            ) : (
-              <div className={`border rounded-xl p-5 text-center ${
-                isColorblind 
-                  ? 'border-orange-300 bg-orange-50/40 text-orange-950' 
-                  : 'border-red-200 bg-red-50/40 text-red-900'
-              }`}>
-                <p className="text-xs font-semibold">
-                  {isColorblind ? '[WRONG / BELOW PASS THRESHOLD] ' : ''}
-                  Your final score was below the pass threshold of <strong>{activeQuiz.passPercentage}%</strong>. Please contact your organization hub supervisor {activeHub.hubName} to request a re-schedule of this competitive quiz.
-                </p>
-              </div>
-            )}
+            </div>
 
           </div>
 

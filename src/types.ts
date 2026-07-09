@@ -32,6 +32,7 @@ export interface Quiz {
   allowedCnics?: string[];
   openAt?: string;
   closeAt?: string;
+  postSubmissionText?: string;
 }
 
 export interface Question {
