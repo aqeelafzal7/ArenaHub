@@ -57,6 +57,7 @@ export interface Attempt {
   passed: boolean;
   cheatFlags: string[];
   status: 'In Progress' | 'Submitted' | 'Locked Out';
+  cameraStatus?: string;
   createdAt: any;
   updatedAt: any;
 }

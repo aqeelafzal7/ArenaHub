@@ -11,7 +11,8 @@ import {
   query, 
   where, 
   arrayUnion, 
-  serverTimestamp 
+  serverTimestamp,
+  onSnapshot
 } from 'firebase/firestore';
 import { useProctoring } from '../hooks/useProctoring';
 import { Hub, Quiz, Question, Attempt } from '../types';
@@ -30,9 +31,41 @@ import { motion } from 'motion/react';
 
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
+const VideoPreview: React.FC<{ srcStream: MediaStream }> = ({ srcStream }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current && srcStream) {
+      videoRef.current.srcObject = srcStream;
+    }
+  }, [srcStream]);
+
+  return (
+    <div className="fixed bottom-4 right-4 z-50 w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden border-2 border-brand-primary shadow-lg bg-black flex items-center justify-center">
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        className="w-full h-full object-cover scale-x-[-1]"
+      />
+    </div>
+  );
+};
+
 export const QuizHub: React.FC = () => {
   const { user, profile, theme, isQuizStarted, setIsQuizStarted } = useAuth();
   const isColorblind = theme === 'colorblind';
+
+  // Camera/Proctor stream states
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [cameraStatus, setCameraStatus] = useState<string>('Requesting...');
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const setAndRefStream = (newStream: MediaStream | null) => {
+    setStream(newStream);
+    streamRef.current = newStream;
+  };
 
   // Search/Access States
   const [hubIdInput, setHubIdInput] = useState('');
@@ -224,6 +257,7 @@ export const QuizHub: React.FC = () => {
       passed: false,
       cheatFlags: [],
       status: 'In Progress',
+      cameraStatus: cameraStatus,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -251,6 +285,55 @@ export const QuizHub: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // Camera & stream lifecycle hooks
+  useEffect(() => {
+    const isAtInstructions = activeHub && activeQuiz && !isQuizStarted && !finalAttempt;
+    const isTaking = activeHub && activeQuiz && isQuizStarted && !finalAttempt;
+
+    if (isAtInstructions && !streamRef.current) {
+      const requestCamera = async () => {
+        try {
+          setCameraStatus('Requesting...');
+          const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          setAndRefStream(mediaStream);
+          setCameraStatus('Active');
+        } catch (err: any) {
+          console.warn('Camera access error:', err);
+          if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+            setCameraStatus('No Hardware');
+          } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            setCameraStatus('Permission Denied');
+          } else {
+            setCameraStatus('Permission Denied');
+          }
+        }
+      };
+      requestCamera();
+    }
+
+    // Stop streams if we cancel or leave the instructions/taking views
+    if (!isAtInstructions && !isTaking && streamRef.current) {
+      try {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      } catch (e) {
+        console.error('Error stopping tracks:', e);
+      }
+      setAndRefStream(null);
+    }
+  }, [activeHub, activeQuiz, isQuizStarted, finalAttempt]);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        try {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+        } catch (e) {
+          console.error('Error stopping tracks on unmount:', e);
+        }
+      }
+    };
+  }, []);
 
   // 4. Timer effect & Scheduled window breach check
   useEffect(() => {
@@ -288,6 +371,33 @@ export const QuizHub: React.FC = () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [isQuizStarted, timeLeft, activeQuiz]);
+
+  // 4.5 Listen for Admin Remote Override (forceLocked)
+  useEffect(() => {
+    if (!activeAttemptId || !isQuizStarted) return;
+
+    const unsubscribe = onSnapshot(doc(db, 'attempts', activeAttemptId), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        if (data && data.forceLocked === true) {
+          setIsQuestionMutationsLocked(true);
+          setWarningModalMessage('SESSION OVERRIDE: This quiz session has been manually terminated by an administrator.');
+          setWarningModalOpen(true);
+          
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+          
+          handleSubmitQuiz('Locked Out', true);
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [activeAttemptId, isQuizStarted]);
 
   // 5. Proctoring Logger Callbacks
   const logCheatFlag = async (flag: string) => {
@@ -393,6 +503,16 @@ export const QuizHub: React.FC = () => {
       setFinalAttempt(finalAttemptData);
       setIsQuizStarted(false);
       setActiveAttemptId(null);
+
+      // Stop camera stream on successful submission
+      if (streamRef.current) {
+        try {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+        } catch (e) {
+          console.error('Error stopping stream tracks on submit:', e);
+        }
+        setAndRefStream(null);
+      }
     } catch (err: any) {
       console.error('Quiz submission error:', err);
       setError(err.message || 'Submission evaluation failed.');
@@ -822,6 +942,7 @@ export const QuizHub: React.FC = () => {
             )}
           </div>
 
+          {stream && <VideoPreview srcStream={stream} />}
         </div>
       )}
 

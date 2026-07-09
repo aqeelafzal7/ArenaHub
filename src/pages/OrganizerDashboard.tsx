@@ -13,7 +13,8 @@ import {
   deleteDoc, 
   updateDoc,
   writeBatch,
-  serverTimestamp 
+  serverTimestamp,
+  arrayUnion
 } from 'firebase/firestore';
 import { uploadToImgBB } from '../utils/upload';
 import { Hub, Quiz, Question, Attempt } from '../types';
@@ -1394,6 +1395,7 @@ export const OrganizerDashboard: React.FC = () => {
                           <th className="px-6 py-3.5">Current Score</th>
                           <th className="px-6 py-3.5">Total Time Consumed</th>
                           <th className="px-6 py-3.5">Proctor Incident Activity Log</th>
+                          <th className="px-6 py-3.5">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-brand-border">
@@ -1417,15 +1419,28 @@ export const OrganizerDashboard: React.FC = () => {
                               </td>
 
                               <td className="px-6 py-4">
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                                  attempt.status === 'Submitted'
-                                    ? 'bg-green-50 border-green-200 text-green-700'
-                                    : attempt.status === 'Locked Out'
-                                    ? 'bg-red-50 border-red-200 text-red-700'
-                                    : 'bg-amber-50 border-amber-200 text-amber-700 animate-pulse'
-                                }`}>
-                                  {attempt.status}
-                                </span>
+                                <div className="flex flex-col gap-1.5 items-start">
+                                  <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                                    attempt.status === 'Submitted'
+                                      ? 'bg-green-50 border-green-200 text-green-700'
+                                      : attempt.status === 'Locked Out'
+                                      ? 'bg-red-50 border-red-200 text-red-700'
+                                      : 'bg-amber-50 border-amber-200 text-amber-700 animate-pulse'
+                                  }`}>
+                                    {attempt.status}
+                                  </span>
+                                  <span className={`inline-block px-2.5 py-0.5 rounded-full text-[9px] font-bold border ${
+                                    attempt.cameraStatus === 'Active'
+                                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                      : attempt.cameraStatus === 'No Hardware'
+                                      ? 'bg-gray-100 border-gray-200 text-gray-600'
+                                      : attempt.cameraStatus === 'Permission Denied'
+                                      ? 'bg-rose-50 border-rose-200 text-rose-700'
+                                      : 'bg-slate-50 border-slate-200 text-slate-600'
+                                  }`}>
+                                    📷 {attempt.cameraStatus || 'Requesting...'}
+                                  </span>
+                                </div>
                               </td>
 
                               <td className="px-6 py-4 font-bold text-brand-text text-sm">
@@ -1462,6 +1477,31 @@ export const OrganizerDashboard: React.FC = () => {
                                       </span>
                                     ))}
                                   </div>
+                                )}
+                              </td>
+
+                              <td className="px-6 py-4">
+                                {attempt.status === 'In Progress' ? (
+                                  <button
+                                    onClick={async () => {
+                                      if (confirm(`Are you sure you want to FORCE TERMINATE the live proctored quiz session for ${attempt.userName}?`)) {
+                                        try {
+                                          await updateDoc(doc(db, 'attempts', attempt.id), { 
+                                            forceLocked: true, 
+                                            cheatFlags: arrayUnion('Manually Terminated by Administrator') 
+                                          });
+                                        } catch (err: any) {
+                                          console.error('Failed to terminate session:', err);
+                                          alert('Error force-terminating session: ' + err.message);
+                                        }
+                                      }
+                                    }}
+                                    className="bg-red-600 hover:bg-red-700 text-white font-extrabold px-3 py-1.5 rounded text-[11px] shadow-xs cursor-pointer transition-colors"
+                                  >
+                                    Force Terminate
+                                  </button>
+                                ) : (
+                                  <span className="text-brand-muted font-bold text-[11px]">Terminated</span>
                                 )}
                               </td>
                             </tr>
