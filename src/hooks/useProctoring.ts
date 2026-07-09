@@ -1,85 +1,58 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
-interface UseProctoringProps {
+interface ProctoringProps {
   active: boolean;
   onCheatFlag: (flag: string) => void;
   onAutoSubmit: (reason: string) => void;
-  onShowWarningModal?: (msg: string) => void;
+  onShowWarningModal: (msg: string) => void;
 }
 
-export function useProctoring({ active, onCheatFlag }: UseProctoringProps) {
+export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarningModal }: ProctoringProps) => {
+  const strikes = useRef(0);
+
   useEffect(() => {
     if (!active) return;
 
-    // 1. Visibility Change Listener (Tab switching)
+    const handleInfraction = (type: string) => {
+      // 1. Send log to Firestore Admin War Room
+      onCheatFlag(type);
+      
+      // 2. Increment local strike counter
+      strikes.current += 1;
+
+      // 3. Trigger appropriate UI response
+      if (strikes.current === 1) {
+        onShowWarningModal(`Proctoring Alert: ${type}. Please remain on this tab. Further infractions will result in automatic submission.`);
+      } else if (strikes.current >= 2) {
+        onAutoSubmit(`Multiple Infractions: ${type}`);
+      }
+    };
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        const timestamp = new Date().toLocaleTimeString();
-        onCheatFlag(`Tab Switched (Visibility Hidden) at ${timestamp}`);
+        handleInfraction('Tab Focus Lost');
       }
     };
 
-    // 2. Window Blur Listener
-    const handleWindowBlur = () => {
-      const timestamp = new Date().toLocaleTimeString();
-      onCheatFlag(`Window Focus Lost (Alt-Tab/Exited App Window) at ${timestamp}`);
+    const handleBlur = () => {
+      handleInfraction('Window Focus Lost');
     };
 
-    // 3. Text Selection Prevention (selectstart)
-    const handleSelectStart = (e: Event) => {
+    const handleContextMenu = (e: Event) => {
       e.preventDefault();
-      const timestamp = new Date().toLocaleTimeString();
-      onCheatFlag(`Attempted Text Selection (SelectStart Blocked) at ${timestamp}`);
+      handleInfraction('Attempted Right Click');
     };
 
-    // 4. Keyboard Shortcut Restrictions (Copy, Paste, Cut, DevTools)
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isCopy = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c';
-      const isPaste = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v';
-      const isCut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x';
-      
-      // DevTools keys: F12, Ctrl+Shift+I, Cmd+Opt+I
-      const isF12 = e.key === 'F12';
-      const isInspect = (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'i';
-      const isInspectMac = (e.metaKey && e.altKey && e.key.toLowerCase() === 'i');
-
-      if (isCopy || isPaste || isCut || isF12 || isInspect || isInspectMac) {
-        e.preventDefault();
-        let action = 'Keyboard Shortcut Restricted';
-        if (isCopy) action = 'Attempted Copy (Ctrl+C)';
-        if (isPaste) action = 'Attempted Paste (Ctrl+V)';
-        if (isCut) action = 'Attempted Cut (Ctrl+X)';
-        if (isF12 || isInspect || isInspectMac) action = 'Attempted Inspect Element (DevTools)';
-        
-        const timestamp = new Date().toLocaleTimeString();
-        onCheatFlag(`${action} at ${timestamp}`);
-      }
-    };
-
-    // 5. Context Menu Prevention (Right Click)
-    const handleContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-      const timestamp = new Date().toLocaleTimeString();
-      onCheatFlag(`Attempted Right Click (Context Menu Disabled) at ${timestamp}`);
-    };
-
-    // Register other listeners immediately
+    // Attach strict listeners
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('blur', handleWindowBlur);
-    document.addEventListener('selectstart', handleSelectStart);
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('blur', handleBlur);
     document.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
+      // Cleanup on unmount
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('blur', handleWindowBlur);
-      document.removeEventListener('selectstart', handleSelectStart);
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('blur', handleBlur);
       document.removeEventListener('contextmenu', handleContextMenu);
     };
-  }, [active, onCheatFlag]);
-
-  return {
-    exitCount: 0
-  };
-}
+  }, [active, onCheatFlag, onAutoSubmit, onShowWarningModal]);
+};
