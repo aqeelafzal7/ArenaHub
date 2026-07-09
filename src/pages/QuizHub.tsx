@@ -53,6 +53,8 @@ export const QuizHub: React.FC = () => {
   // Timer States
   const [timeLeft, setTimeLeft] = useState(0); // in seconds
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const isSubmittingRef = useRef(false);
+  const cheatFlagsRef = useRef<string[]>([]);
 
   // Proctoring Alert Modal States
   const [warningModalOpen, setWarningModalOpen] = useState(false);
@@ -202,9 +204,19 @@ export const QuizHub: React.FC = () => {
   const handleStartQuiz = async () => {
     if (!user || !profile || !activeQuiz || !activeHub || quizQuestions.length === 0) return;
     setError(null);
+
+    // Request fullscreen synchronously under the user event gesture to bypass browser block
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (fsErr) {
+      console.warn('Fullscreen request failed or was denied:', fsErr);
+    }
+
     setLoading(true);
 
-    const attemptId = 'attempt_' + Math.random().toString(36).substring(2, 11);
+    const attemptId = doc(collection(db, 'attempts')).id;
     const path = `attempts/${attemptId}`;
 
     const newAttempt: Attempt = {
@@ -237,6 +249,8 @@ export const QuizHub: React.FC = () => {
       setIsQuizStarted(true);
       setCurrentQuestionIdx(0);
       setAnswers({});
+      cheatFlagsRef.current = [];
+      isSubmittingRef.current = false;
       setIsQuestionMutationsLocked(false);
       setWarningModalOpen(false);
     } catch (err: any) {
@@ -285,6 +299,7 @@ export const QuizHub: React.FC = () => {
 
   // 5. Proctoring Logger Callbacks
   const logCheatFlag = async (flag: string) => {
+    cheatFlagsRef.current.push(flag);
     if (!activeAttemptId) return;
     const path = `attempts/${activeAttemptId}`;
     try {
@@ -335,11 +350,20 @@ export const QuizHub: React.FC = () => {
 
   // 6. Submit Quiz Handler
   const handleSubmitQuiz = async (reason: 'Submitted' | 'Timer Expired' | 'Locked Out', forceLockout = false) => {
-    if (!activeAttemptId || !activeQuiz || quizQuestions.length === 0) return;
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+
+    if (!activeAttemptId || !activeQuiz || quizQuestions.length === 0) {
+      isSubmittingRef.current = false;
+      return;
+    }
     setLoading(true);
     
     // Clear timer
-    if (timerRef.current) clearInterval(timerRef.current);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
 
     // Compute raw score
     let correctCount = 0;
@@ -357,13 +381,9 @@ export const QuizHub: React.FC = () => {
     const finalStatus = forceLockout ? 'Locked Out' : 'Submitted';
     const secondsConsumed = (activeQuiz.timeLimit * 60) - timeLeft;
 
-    const path = `attempts/${activeAttemptId}`;
     try {
       const attemptDocRef = doc(db, 'attempts', activeAttemptId);
-      
-      // Fetch latest cheat flags before saving final copy
-      const snapDoc = await getDoc(attemptDocRef);
-      const currentFlags = snapDoc.exists() ? (snapDoc.data() as Attempt).cheatFlags : [];
+      const currentFlags = [...cheatFlagsRef.current];
 
       const finalAttemptData: Attempt = {
         id: activeAttemptId,
@@ -378,7 +398,7 @@ export const QuizHub: React.FC = () => {
         passed: isPassed,
         cheatFlags: currentFlags,
         status: finalStatus,
-        createdAt: snapDoc.exists() ? (snapDoc.data() as Attempt).createdAt : new Date().toISOString(),
+        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
@@ -397,15 +417,17 @@ export const QuizHub: React.FC = () => {
     } catch (err: any) {
       setError(err.message || 'Submission evaluation failed.');
     } finally {
+      isSubmittingRef.current = false;
       setLoading(false);
     }
   };
 
   // 7. Dynamic Style Variables for Tenant branding
-  const tenantColors = activeHub ? {
-    '--primary': activeHub.primaryColor,
-    '--secondary': activeHub.secondaryColor,
-  } as React.CSSProperties : {};
+  const tenantColors = {
+    '--primary': activeHub ? activeHub.primaryColor : '#2563eb',
+    '--secondary': activeHub ? activeHub.secondaryColor : '#4f46e5',
+    '--accent': activeHub ? activeHub.secondaryColor : '#ea580c',
+  } as React.CSSProperties;
 
   const timeLock = activeQuiz ? isOutsideTimeWindow(activeQuiz) : null;
   const schedule = activeQuiz ? getQuizSchedule(activeQuiz) : null;

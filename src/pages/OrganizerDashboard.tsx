@@ -274,7 +274,7 @@ export const OrganizerDashboard: React.FC = () => {
     setQuizLoading(true);
     setError(null);
 
-    const quizId = 'quiz_' + Math.random().toString(36).substring(2, 11);
+    const quizId = doc(collection(db, 'quizzes')).id;
 
     const newQuiz: Quiz = {
       id: quizId,
@@ -377,7 +377,7 @@ export const OrganizerDashboard: React.FC = () => {
     if (!selectedQuiz) return;
     setError(null);
 
-    const qId = 'q_' + Math.random().toString(36).substring(2, 11);
+    const qId = doc(collection(db, 'questions')).id;
     const options = [qOptA.trim(), qOptB.trim(), qOptC.trim(), qOptD.trim()];
 
     const newQuestion: Question = {
@@ -511,7 +511,7 @@ export const OrganizerDashboard: React.FC = () => {
             const isValid = foundIdx !== -1;
             
             return {
-              id: 'q_csv_' + Math.random().toString(36).substring(2, 11) + '_' + idx,
+              id: 'q_csv_' + crypto.randomUUID() + '_' + idx,
               text: questionText,
               options,
               correctOptionText: correctText,
@@ -1673,7 +1673,7 @@ export const OrganizerDashboard: React.FC = () => {
                   </button>
                   <button
                     onClick={() => {
-                      const newRowId = 'q_csv_' + Math.random().toString(36).substring(2, 11) + '_manual';
+                      const newRowId = 'q_csv_' + crypto.randomUUID() + '_manual';
                       const newRow: CsvQuestionRow = {
                         id: newRowId,
                         text: 'New Question statement',
