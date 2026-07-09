@@ -8,7 +8,7 @@ import { QuizHub } from './pages/QuizHub';
 import { ShieldAlert } from 'lucide-react';
 
 const AppContent: React.FC = () => {
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, isQuizStarted } = useAuth();
 
   // 1. Loading State
   if (loading) {
@@ -29,7 +29,7 @@ const AppContent: React.FC = () => {
   if (!user) {
     return (
       <div className="min-h-screen bg-brand-bg flex flex-col">
-        <Navbar />
+        {!isQuizStarted && <Navbar />}
         <main className="flex-1">
           <AuthPage />
         </main>
@@ -43,7 +43,7 @@ const AppContent: React.FC = () => {
   if (hasIncompleteProfile) {
     return (
       <div className="min-h-screen bg-brand-bg flex flex-col">
-        <Navbar />
+        {!isQuizStarted && <Navbar />}
         <main className="flex-1">
           <OnboardingPage />
         </main>
@@ -54,7 +54,7 @@ const AppContent: React.FC = () => {
   // 4. Role-based Dashboard Router
   return (
     <div className="min-h-screen bg-brand-bg flex flex-col">
-      <Navbar />
+      {!isQuizStarted && <Navbar />}
       <main className="flex-1">
         {profile.role === 'Organizer' ? (
           <OrganizerDashboard />

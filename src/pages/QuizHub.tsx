@@ -31,7 +31,7 @@ import { motion } from 'motion/react';
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 export const QuizHub: React.FC = () => {
-  const { user, profile, theme } = useAuth();
+  const { user, profile, theme, isQuizStarted, setIsQuizStarted } = useAuth();
   const isColorblind = theme === 'colorblind';
 
   // Search/Access States
@@ -47,7 +47,6 @@ export const QuizHub: React.FC = () => {
   const [isAttemptsExhausted, setIsAttemptsExhausted] = useState(false);
 
   // Taking States
-  const [isQuizStarted, setIsQuizStarted] = useState(false);
   const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [answers, setAnswers] = useState<{ [qId: string]: number }>({});
@@ -207,15 +206,6 @@ export const QuizHub: React.FC = () => {
     if (!user || !profile || !activeQuiz || !activeHub || quizQuestions.length === 0) return;
     setError(null);
 
-    // Request fullscreen synchronously under the user event gesture to bypass browser block
-    try {
-      if (!isMobile && !document.fullscreenElement) {
-        await document.documentElement.requestFullscreen();
-      }
-    } catch (fsErr) {
-      console.warn('Fullscreen request failed or was denied:', fsErr);
-    }
-
     setLoading(true);
 
     const attemptId = doc(collection(db, 'attempts')).id;
@@ -332,22 +322,9 @@ export const QuizHub: React.FC = () => {
     }
   });
 
-  // Dismiss Warning Modal and request re-fullscreen
-  const handleDismissWarning = async () => {
-    if (isQuestionMutationsLocked) {
-      // Cannot dismiss if lockout/auto-submit has occurred
-      setWarningModalOpen(false);
-      return;
-    }
-    try {
-      if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen();
-      }
-      setWarningModalOpen(false);
-    } catch (err) {
-      console.warn('Failed to re-enter fullscreen:', err);
-      setWarningModalOpen(false);
-    }
+  // Dismiss Warning Modal
+  const handleDismissWarning = () => {
+    setWarningModalOpen(false);
   };
 
   // 6. Submit Quiz Handler
@@ -355,35 +332,35 @@ export const QuizHub: React.FC = () => {
     if (isSubmittingRef.current) return;
     isSubmittingRef.current = true;
 
-    if (!activeAttemptId || !activeQuiz || quizQuestions.length === 0) {
-      isSubmittingRef.current = false;
-      return;
-    }
-    setLoading(true);
-    
-    // Clear timer
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
-    // Compute raw score
-    let correctCount = 0;
-    quizQuestions.forEach((q) => {
-      const selected = answers[q.id];
-      if (selected !== undefined && selected === q.correctOption) {
-        correctCount++;
-      }
-    });
-
-    const finalScore = correctCount;
-    const finalPercentage = (correctCount / quizQuestions.length) * 100;
-    const isPassed = finalPercentage >= activeQuiz.passPercentage;
-
-    const finalStatus = forceLockout ? 'Locked Out' : 'Submitted';
-    const secondsConsumed = (activeQuiz.timeLimit * 60) - timeLeft;
-
     try {
+      if (!activeAttemptId || !activeQuiz || quizQuestions.length === 0) {
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      
+      // Clear timer
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
+      // Compute raw score
+      let correctCount = 0;
+      quizQuestions.forEach((q) => {
+        const selected = answers[q.id];
+        if (selected !== undefined && selected === q.correctOption) {
+          correctCount++;
+        }
+      });
+
+      const finalScore = correctCount;
+      const finalPercentage = (correctCount / quizQuestions.length) * 100;
+      const isPassed = finalPercentage >= activeQuiz.passPercentage;
+
+      const finalStatus = forceLockout ? 'Locked Out' : 'Submitted';
+      const secondsConsumed = (activeQuiz.timeLimit * 60) - timeLeft;
+
       const attemptDocRef = doc(db, 'attempts', activeAttemptId);
       const currentFlags = [...cheatFlagsRef.current];
 
@@ -417,6 +394,7 @@ export const QuizHub: React.FC = () => {
       setIsQuizStarted(false);
       setActiveAttemptId(null);
     } catch (err: any) {
+      console.error('Quiz submission error:', err);
       setError(err.message || 'Submission evaluation failed.');
     } finally {
       isSubmittingRef.current = false;
@@ -670,8 +648,8 @@ export const QuizHub: React.FC = () => {
                   {isColorblind ? '[SECURE] PROCTORED ASSESSMENT ROOM' : 'Proctored Environment Active!'}
                 </h3>
                 <ul className="text-xs space-y-2 list-disc list-inside">
-                  <li><strong>Fullscreen Lock:</strong> The quiz runs in full-screen. Exiting fullscreen mode once triggers an operational warning modal; exiting a second time results in instant auto-submission.</li>
-                  <li><strong>Tab Change Lockdown:</strong> Do NOT navigate away. Switching tabs or losing window focus is instantly logged to Firestore as an infraction.</li>
+                  <li><strong>Focus Lock:</strong> Do not exit or minimize the exam window. Losing focus triggers a real-time infraction log.</li>
+                  <li><strong>Tab Change Lockdown:</strong> Do NOT navigate away. Switching tabs is instantly logged to Firestore as an infraction.</li>
                   <li><strong>Layout Device Lockdown:</strong> Clipboard Copy/Paste shortcuts and Right-click context menus are completely disabled.</li>
                   <li><strong>Verified Identity:</strong> Your exam results will be digitally logged and verified against CNIC {profile?.cnic}.</li>
                 </ul>
@@ -696,7 +674,7 @@ export const QuizHub: React.FC = () => {
                   style={{ backgroundColor: 'var(--primary)' }}
                   id="start-quiz-btn"
                 >
-                  {isMobile ? 'Start Proctored Exam' : 'Enter Fullscreen & Start'}
+                  Start Proctored Exam
                 </button>
               </div>
             </>
@@ -1007,7 +985,7 @@ export const QuizHub: React.FC = () => {
                     : 'bg-brand-primary text-white hover:bg-opacity-90'
                 }`}
               >
-                Re-enter Fullscreen & Resume
+                Acknowledge & Resume
               </button>
             )}
           </motion.div>

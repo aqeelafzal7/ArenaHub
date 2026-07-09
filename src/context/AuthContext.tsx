@@ -25,6 +25,8 @@ interface AuthContextType {
   logout: () => Promise<void>;
   onboardUser: (role: UserRole, cnic: string, name: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
+  isQuizStarted: boolean;
+  setIsQuizStarted: (isStarted: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -33,6 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isQuizStarted, setIsQuizStarted] = useState(false);
   const [theme, setThemeState] = useState<ThemeMode>(() => {
     return (localStorage.getItem('theme') as ThemeMode) || 'light';
   });
@@ -164,7 +167,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loginWithEmail,
       logout,
       onboardUser,
-      refreshProfile
+      refreshProfile,
+      isQuizStarted,
+      setIsQuizStarted
     }}>
       {children}
     </AuthContext.Provider>

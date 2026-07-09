@@ -1,6 +1,4 @@
-import { useEffect, useRef } from 'react';
-
-const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+import { useEffect } from 'react';
 
 interface UseProctoringProps {
   active: boolean;
@@ -9,58 +7,11 @@ interface UseProctoringProps {
   onShowWarningModal?: (msg: string) => void;
 }
 
-export function useProctoring({ active, onCheatFlag, onAutoSubmit, onShowWarningModal }: UseProctoringProps) {
-  const exitFullscreenCount = useRef(0);
-  const isSubmitting = useRef(false);
-
+export function useProctoring({ active, onCheatFlag }: UseProctoringProps) {
   useEffect(() => {
     if (!active) return;
 
-    let timeoutId: NodeJS.Timeout | null = null;
-
-    // Fullscreen Change Listener
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement && !isSubmitting.current) {
-        exitFullscreenCount.current += 1;
-        
-        if (exitFullscreenCount.current === 1) {
-          const timestamp = new Date().toLocaleTimeString();
-          onCheatFlag(`Exited Fullscreen (Infraction 1/2) at ${timestamp}`);
-          if (onShowWarningModal) {
-            onShowWarningModal('CRITICAL SECURITY ALERT: Fullscreen Mode Deactivated. You must remain in fullscreen mode. A secondary exit will result in instant auto-submission.');
-          } else {
-            alert('WARNING: You have exited Fullscreen mode! Exiting again will auto-submit your quiz.');
-            document.documentElement.requestFullscreen().catch(() => {});
-          }
-        } else if (exitFullscreenCount.current >= 2) {
-          isSubmitting.current = true;
-          const timestamp = new Date().toLocaleTimeString();
-          onCheatFlag(`Exited Fullscreen Second Time (Infraction 2/2) - Auto Submitted at ${timestamp}`);
-          onAutoSubmit('Fullscreen Exit Violation');
-        }
-      }
-    };
-
-    // If not mobile, initialize fullscreen logic after a grace period of 2500ms
-    if (!isMobile) {
-      timeoutId = setTimeout(() => {
-        const enterFullscreen = async () => {
-          try {
-            if (!document.fullscreenElement) {
-              await document.documentElement.requestFullscreen();
-            }
-          } catch (err) {
-            console.warn('Failed to enter fullscreen mode automatically:', err);
-            onCheatFlag('Failed to auto-enter Fullscreen (Permission Blocked)');
-          }
-        };
-
-        enterFullscreen();
-        document.addEventListener('fullscreenchange', handleFullscreenChange);
-      }, 2500);
-    }
-
-    // 3. Visibility Change Listener (Tab switching)
+    // 1. Visibility Change Listener (Tab switching)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         const timestamp = new Date().toLocaleTimeString();
@@ -68,20 +19,20 @@ export function useProctoring({ active, onCheatFlag, onAutoSubmit, onShowWarning
       }
     };
 
-    // 4. Window Blur Listener
+    // 2. Window Blur Listener
     const handleWindowBlur = () => {
       const timestamp = new Date().toLocaleTimeString();
       onCheatFlag(`Window Focus Lost (Alt-Tab/Exited App Window) at ${timestamp}`);
     };
 
-    // 5. Text Selection Prevention (selectstart)
+    // 3. Text Selection Prevention (selectstart)
     const handleSelectStart = (e: Event) => {
       e.preventDefault();
       const timestamp = new Date().toLocaleTimeString();
       onCheatFlag(`Attempted Text Selection (SelectStart Blocked) at ${timestamp}`);
     };
 
-    // 6. Keyboard Shortcut Restrictions (Copy, Paste, Cut, DevTools)
+    // 4. Keyboard Shortcut Restrictions (Copy, Paste, Cut, DevTools)
     const handleKeyDown = (e: KeyboardEvent) => {
       const isCopy = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c';
       const isPaste = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v';
@@ -105,7 +56,7 @@ export function useProctoring({ active, onCheatFlag, onAutoSubmit, onShowWarning
       }
     };
 
-    // 7. Context Menu Prevention (Right Click)
+    // 5. Context Menu Prevention (Right Click)
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       const timestamp = new Date().toLocaleTimeString();
@@ -120,26 +71,15 @@ export function useProctoring({ active, onCheatFlag, onAutoSubmit, onShowWarning
     document.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      if (!isMobile) {
-        document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('selectstart', handleSelectStart);
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('contextmenu', handleContextMenu);
-
-      // Exit Fullscreen when unmounting (only if not mobile)
-      if (!isMobile && document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
-      }
     };
-  }, [active, onCheatFlag, onAutoSubmit, onShowWarningModal]);
+  }, [active, onCheatFlag]);
 
   return {
-    exitCount: exitFullscreenCount.current
+    exitCount: 0
   };
 }
