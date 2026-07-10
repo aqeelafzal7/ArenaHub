@@ -28,20 +28,26 @@ import {
   BookOpen 
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import * as tf from '@tensorflow/tfjs';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import * as blazeface from '@tensorflow-models/blazeface';
 
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-const VideoPreview: React.FC<{ srcStream: MediaStream }> = ({ srcStream }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
+interface VideoPreviewProps {
+  srcStream: MediaStream;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+}
 
+const VideoPreview: React.FC<VideoPreviewProps> = ({ srcStream, videoRef }) => {
   useEffect(() => {
     if (videoRef.current && srcStream) {
       videoRef.current.srcObject = srcStream;
     }
-  }, [srcStream]);
+  }, [srcStream, videoRef]);
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden border-2 border-brand-primary shadow-lg bg-black flex items-center justify-center">
+    <div className="fixed bottom-4 right-4 z-50 w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden border-2 border-brand-primary shadow-lg bg-black flex items-center justify-center relative">
       <video
         ref={videoRef}
         autoPlay
@@ -49,6 +55,11 @@ const VideoPreview: React.FC<{ srcStream: MediaStream }> = ({ srcStream }) => {
         playsInline
         className="w-full h-full object-cover scale-x-[-1]"
       />
+      <div className="absolute inset-x-0 bottom-1 flex justify-center pointer-events-none">
+        <span className="text-[8px] sm:text-[9px] bg-emerald-950/80 border border-emerald-500/50 text-emerald-400 font-extrabold tracking-widest px-1.5 py-0.5 rounded uppercase animate-pulse shadow-md">
+          Scanning...
+        </span>
+      </div>
     </div>
   );
 };
@@ -61,6 +72,9 @@ export const QuizHub: React.FC = () => {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [cameraStatus, setCameraStatus] = useState<string>('Requesting...');
   const streamRef = useRef<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [aiWarning, setAiWarning] = useState<string | null>(null);
 
   const setAndRefStream = (newStream: MediaStream | null) => {
     setStream(newStream);
@@ -335,6 +349,85 @@ export const QuizHub: React.FC = () => {
     };
   }, []);
 
+  // 4.1 AI Vision Proctoring Detection Loop (Warning-Only)
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId) return;
+
+    let isCancelled = false;
+    let intervalId: NodeJS.Timeout | null = null;
+    let cocoModel: any = null;
+    let faceModel: any = null;
+
+    const loadModelsAndStartLoop = async () => {
+      try {
+        console.log('Initializing AI Vision Proctoring models...');
+        await tf.ready();
+        const [loadedCoco, loadedFace] = await Promise.all([
+          cocoSsd.load(),
+          blazeface.load()
+        ]);
+
+        if (isCancelled) return;
+        cocoModel = loadedCoco;
+        faceModel = loadedFace;
+        console.log('AI models loaded successfully!');
+
+        intervalId = setInterval(async () => {
+          if (isCancelled || !videoRef.current || videoRef.current.readyState < 2) return;
+
+          try {
+            const videoEl = videoRef.current;
+
+            // 1. Detect cell phones (coco-ssd)
+            const predictions = await cocoModel.detect(videoEl);
+            const hasPhone = predictions.some((pred: any) => pred.class === 'cell phone');
+
+            if (hasPhone) {
+              console.log('AI Detected: Cell Phone');
+              await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                cheatFlags: arrayUnion('AI Flag: Cell Phone Detected')
+              });
+              setAiWarning('Warning: Suspicious activity detected by camera.');
+            }
+
+            // 2. Detect multiple faces (blazeface)
+            const faces = await faceModel.estimateFaces(videoEl, false);
+            if (faces.length > 1) {
+              console.log('AI Detected: Multiple People');
+              await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                cheatFlags: arrayUnion('AI Flag: Multiple People Detected')
+              });
+              setAiWarning('Warning: Suspicious activity detected by camera.');
+            }
+          } catch (err) {
+            console.error('AI Frame detection evaluation error:', err);
+          }
+        }, 3000);
+      } catch (err) {
+        console.error('Failed to load TFJS proctoring models:', err);
+      }
+    };
+
+    loadModelsAndStartLoop();
+
+    return () => {
+      isCancelled = true;
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [isQuizStarted, activeAttemptId]);
+
+  // Toast Auto-Dismiss
+  useEffect(() => {
+    if (aiWarning) {
+      const timer = setTimeout(() => {
+        setAiWarning(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [aiWarning]);
+
   // 4. Timer effect & Scheduled window breach check
   useEffect(() => {
     if (!isQuizStarted || timeLeft <= 0) return;
@@ -389,7 +482,7 @@ export const QuizHub: React.FC = () => {
             timerRef.current = null;
           }
           
-          handleSubmitQuiz('Locked Out', true);
+          submitQuiz('Manually Terminated by Administrator');
         }
       }
     });
@@ -520,6 +613,10 @@ export const QuizHub: React.FC = () => {
       isSubmittingRef.current = false;
       setLoading(false);
     }
+  };
+
+  const submitQuiz = async (reason?: string) => {
+    await handleSubmitQuiz('Locked Out', true);
   };
 
   // 7. Dynamic Style Variables for Tenant branding
@@ -942,7 +1039,13 @@ export const QuizHub: React.FC = () => {
             )}
           </div>
 
-          {stream && <VideoPreview srcStream={stream} />}
+          {stream && <VideoPreview srcStream={stream} videoRef={videoRef} />}
+          {aiWarning && (
+            <div className="fixed top-24 left-1/2 transform -translate-x-1/2 z-55 bg-red-600 border border-red-500 text-white font-extrabold px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 animate-bounce">
+              <ShieldAlert className="h-5 w-5 animate-pulse" />
+              <span className="text-sm">{aiWarning}</span>
+            </div>
+          )}
         </div>
       )}
 

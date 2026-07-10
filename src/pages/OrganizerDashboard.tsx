@@ -1484,11 +1484,11 @@ export const OrganizerDashboard: React.FC = () => {
                                 {attempt.status === 'In Progress' ? (
                                   <button
                                     onClick={async () => {
-                                      if (confirm(`Are you sure you want to FORCE TERMINATE the live proctored quiz session for ${attempt.userName}?`)) {
+                                      if (confirm("Are you sure you want to terminate this student's exam?")) {
                                         try {
                                           await updateDoc(doc(db, 'attempts', attempt.id), { 
                                             forceLocked: true, 
-                                            cheatFlags: arrayUnion('Manually Terminated by Administrator') 
+                                            cheatFlags: arrayUnion('Manually Terminated by Admin') 
                                           });
                                         } catch (err: any) {
                                           console.error('Failed to terminate session:', err);
