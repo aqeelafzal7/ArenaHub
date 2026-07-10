@@ -64,6 +64,15 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({ srcStream, videoRef }) => {
   );
 };
 
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 export const QuizHub: React.FC = () => {
   const { user, profile, theme, isQuizStarted, setIsQuizStarted } = useAuth();
   const isColorblind = theme === 'colorblind';
@@ -229,10 +238,17 @@ export const QuizHub: React.FC = () => {
         // Fetch questions pool
         const qQuery = query(collection(db, 'questions'), where('quizId', '==', targetQuizId));
         const questionsSnap = await getDocs(qQuery);
-        const qList: Question[] = [];
+        let qList: Question[] = [];
         questionsSnap.forEach((docSnap) => {
-          qList.push(docSnap.data() as Question);
+          const q = docSnap.data() as Question;
+          const shuffledOptions = q.options ? shuffleArray(q.options) : [];
+          qList.push({
+            ...q,
+            options: shuffledOptions,
+          });
         });
+        
+        qList = shuffleArray(qList);
         
         setQuizQuestions(qList);
         if (qList.length === 0) {
@@ -619,6 +635,12 @@ export const QuizHub: React.FC = () => {
     await handleSubmitQuiz('Locked Out', true);
   };
 
+  const handleSkip = () => {
+    if (currentQuestionIdx + 1 < quizQuestions.length) {
+      setCurrentQuestionIdx((prev) => prev + 1);
+    }
+  };
+
   // 7. Dynamic Style Variables for Tenant branding
   const tenantColors = {
     '--primary': activeHub ? activeHub.primaryColor : '#2563eb',
@@ -628,6 +650,10 @@ export const QuizHub: React.FC = () => {
 
   const timeLock = activeQuiz ? isOutsideTimeWindow(activeQuiz) : null;
   const schedule = activeQuiz ? getQuizSchedule(activeQuiz) : null;
+
+  const firstUnansweredIndex = quizQuestions.findIndex((q) => answers[q.id] === undefined);
+  const currentQuestionId = quizQuestions[currentQuestionIdx]?.id;
+  const hasSelectedOption = currentQuestionId ? answers[currentQuestionId] !== undefined : false;
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
@@ -1014,6 +1040,15 @@ export const QuizHub: React.FC = () => {
               Previous
             </button>
 
+            {currentQuestionIdx + 1 < quizQuestions.length && !hasSelectedOption && (
+              <button
+                onClick={handleSkip}
+                className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-muted hover:text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg cursor-pointer transition-all"
+              >
+                Skip for Now
+              </button>
+            )}
+
             {currentQuestionIdx < quizQuestions.length - 1 ? (
               <button
                 onClick={() => setCurrentQuestionIdx((p) => p + 1)}
@@ -1021,6 +1056,14 @@ export const QuizHub: React.FC = () => {
                 style={{ backgroundColor: isColorblind ? '#1d4ed8' : 'var(--primary)' }}
               >
                 Next Question
+              </button>
+            ) : firstUnansweredIndex !== -1 ? (
+              <button
+                onClick={() => setCurrentQuestionIdx(firstUnansweredIndex)}
+                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 cursor-pointer transition-all"
+                style={{ backgroundColor: isColorblind ? '#1d4ed8' : 'var(--primary)' }}
+              >
+                Review Skipped Questions
               </button>
             ) : (
               <button
@@ -1034,7 +1077,7 @@ export const QuizHub: React.FC = () => {
                 style={{ backgroundColor: isColorblind ? '#ea580c' : 'var(--accent)' }}
                 id="submit-quiz-btn"
               >
-                {loading ? 'Submitting Answers...' : 'Submit Quiz Exam'}
+                {loading ? 'Submitting Answers...' : 'Submit Quiz'}
               </button>
             )}
           </div>

@@ -41,9 +41,12 @@ import {
   AlertCircle,
   Filter,
   CheckCircle,
-  HelpCircle
+  HelpCircle,
+  Printer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 
 interface CsvQuestionRow {
   id: string;
@@ -111,6 +114,12 @@ export const OrganizerDashboard: React.FC = () => {
   // Feedback/Error States
   const [error, setError] = useState<string | null>(null);
 
+  // Signatory States
+  const [hubData, setHubData] = useState<any>(null);
+  const [reportSignatoryName, setReportSignatoryName] = useState('');
+  const [reportDesignation, setReportDesignation] = useState('FOUNDER');
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+
   // Helper: Format ISO string to datetime-local format (YYYY-MM-DDTHH:MM)
   const formatIsoForDatetimeLocal = (isoString?: string): string => {
     if (!isoString) return '';
@@ -124,6 +133,213 @@ export const OrganizerDashboard: React.FC = () => {
     }
   };
 
+  const handleDownloadRankedReport = async () => {
+    if (!activeLiveQuizId) return;
+    
+    const activeQuizObj = quizzes.find(q => q.id === activeLiveQuizId);
+    const quizTitle = activeQuizObj ? activeQuizObj.title : 'Quiz Event';
+
+    try {
+      setIsGeneratingReport(true);
+      // 1. Fetch questions dynamically to get precise total questions count
+      const qQuery = query(collection(db, 'questions'), where('quizId', '==', activeLiveQuizId));
+      const questionsSnap = await getDocs(qQuery);
+      const totalQuestions = questionsSnap.size || 10; // Fallback to 10 if none found
+
+      const pointsPerQuestion = (activeQuizObj as any)?.pointsPerQuestion || 1;
+      const totalPossible = (activeQuizObj as any)?.totalPossible || (totalQuestions * pointsPerQuestion);
+
+      // 2. Filter & sort attempts: valid completions descending by score, ascending by timeSpentSeconds as tie-breaker
+      let sortedAttempts = [...liveAttempts].filter(
+        (attempt) => attempt.status === 'Submitted' || attempt.status === 'Locked Out'
+      );
+
+      // Fallback to all attempts if no completions are found, so report is never blank
+      if (sortedAttempts.length === 0) {
+        sortedAttempts = [...liveAttempts];
+      }
+
+      sortedAttempts.sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        return a.timeSpentSeconds - b.timeSpentSeconds;
+      });
+
+      // 3. Create the HTML layout for the report
+      const container = document.createElement('div');
+      container.style.position = 'absolute';
+      container.style.left = '-9999px';
+      container.style.top = '-9999px';
+      container.style.width = '800px';
+      container.style.boxSizing = 'border-box';
+      
+      const primaryThemeColor = hubData?.primaryColor || primaryColor || '#0284c7';
+      const secondaryThemeColor = hubData?.secondaryColor || secondaryColor || '#4f46e5';
+
+      const rowsHtml = sortedAttempts.map((attempt, index) => {
+        const rank = index + 1;
+        const timeSpent = attempt.timeSpentSeconds;
+        const timeStr = timeSpent ? `${Math.floor(timeSpent / 60)}m ${timeSpent % 60}s` : '0m 0s';
+        
+        const correct = Math.round(attempt.score / pointsPerQuestion);
+        const totalQuestionsOfQuiz = Math.round(totalPossible / pointsPerQuestion);
+        const wrong = Math.max(0, totalQuestionsOfQuiz - correct);
+        
+        let rankBadgeStyle = 'color: #475569;';
+        let rankText = `${rank}`;
+        if (rank === 1) {
+          rankBadgeStyle = 'color: #d97706; font-size: 15px; font-weight: 900;';
+          rankText = '🥇 1';
+        } else if (rank === 2) {
+          rankBadgeStyle = 'color: #475569; font-size: 15px; font-weight: 900;';
+          rankText = '🥈 2';
+        } else if (rank === 3) {
+          rankBadgeStyle = 'color: #b45309; font-size: 15px; font-weight: 900;';
+          rankText = '🥉 3';
+        }
+
+        return `
+          <tr style="border-bottom: 1px solid #e2e8f0;">
+            <td style="padding: 14px 10px; font-size: 13px; font-weight: 800; text-align: center; ${rankBadgeStyle}">
+              ${rankText}
+            </td>
+            <td style="padding: 14px 10px;">
+              <div style="font-size: 13px; font-weight: 700; color: #0f172a;">${attempt.userName || 'N/A'}</div>
+              <div style="font-size: 10px; color: #64748b; font-family: monospace; margin-top: 2px;">CNIC: ${attempt.userCnic || 'N/A'}</div>
+            </td>
+            <td style="padding: 14px 10px; font-size: 13px; color: #334155; text-align: center;">
+              ${timeStr}
+            </td>
+            <td style="padding: 14px 10px; text-align: center;">
+              <span style="font-size: 12px; font-weight: 700; color: #16a34a; background: #f0fdf4; padding: 2px 6px; border-radius: 4px;">${correct} Correct</span>
+              <span style="font-size: 12px; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">${wrong} Wrong</span>
+            </td>
+            <td style="padding: 14px 10px; font-size: 14px; font-weight: 800; color: #0f172a; text-align: right;">
+              ${attempt.score} / ${totalPossible}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      const logoElementRight = hubData?.logoUrl 
+        ? `<img src="${hubData.logoUrl}" style="max-height: 48px; max-width: 180px; object-fit: contain;" referrerPolicy="no-referrer" />` 
+        : `<span style="font-size: 28px; color: ${primaryThemeColor}">⚡</span>`;
+
+      container.innerHTML = `
+        <div style="padding: 45px; background: #ffffff; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; box-sizing: border-box; border: 1px solid #e2e8f0;">
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Great+Vibes&display=swap');
+            @font-face {
+              font-family: 'Augustia';
+              src: local('Augustia'), local('Great Vibes');
+            }
+          </style>
+
+          <!-- Header -->
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid ${primaryThemeColor}; padding-bottom: 24px; margin-bottom: 32px;">
+            <div>
+              <div style="font-size: 24px; font-weight: 900; color: ${primaryThemeColor}; letter-spacing: -0.05em;">
+                ${hubData?.hubName || 'Event'}
+              </div>
+              <div style="font-size: 11px; font-weight: 800; color: ${secondaryThemeColor}; text-transform: uppercase; letter-spacing: 0.15em; margin-top: 6px;">
+                Ranked Event Scoreboard Report
+              </div>
+            </div>
+            <div>
+              ${logoElementRight}
+            </div>
+          </div>
+
+          <!-- Metadata Summary Row -->
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 32px; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 24px;">
+            <div>
+              <div style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">Event / Quiz Title</div>
+              <div style="font-size: 16px; font-weight: 800; color: #0f172a;">${quizTitle}</div>
+            </div>
+            <div style="text-align: center; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0;">
+              <div style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">Total Participants</div>
+              <div style="font-size: 20px; font-weight: 900; color: #0f172a;">${sortedAttempts.length}</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">Total Questions</div>
+              <div style="font-size: 20px; font-weight: 900; color: #0f172a;">${Math.round(totalPossible / pointsPerQuestion)}</div>
+            </div>
+          </div>
+
+          <!-- Table Header and Rows -->
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 48px; text-align: left;">
+            <thead>
+              <tr style="border-bottom: 2px solid #e2e8f0; background: #f8fafc;">
+                <th style="padding: 12px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; width: 70px; text-align: center;">Rank</th>
+                <th style="padding: 12px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Full Name & CNIC</th>
+                <th style="padding: 12px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; text-align: center; width: 140px;">Time Consumed</th>
+                <th style="padding: 12px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; text-align: center; width: 160px;">Correct / Wrong</th>
+                <th style="padding: 12px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; text-align: right; width: 110px;">Total Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+
+          <!-- Digital Signature Section -->
+          <div style="margin-top: 80px; border-top: 2px solid #e2e8f0; padding-top: 20px; display: flex; justify-content: flex-end;">
+            <div style="text-align: right; width: 320px;">
+              <div style="font-family: 'Augustia', 'Great Vibes', 'Georgia', 'Times New Roman', serif; font-style: italic; font-size: 28px; color: ${primaryThemeColor}; margin-bottom: 6px; letter-spacing: 0.02em;">
+                ${reportSignatoryName || 'Authorized Signature'}
+              </div>
+              <div style="font-size: 10px; font-weight: 900; color: #475569; letter-spacing: 0.15em; text-transform: uppercase;">
+                ${reportDesignation || 'SIGNATORY DEPARTMENT / DESIGNATION'}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(container);
+
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+
+      document.body.removeChild(container);
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgWidth = 210; // mm
+      const pageHeight = 297; // mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      const safeTitle = quizTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      pdf.save(`${safeTitle}_Ranked_Report.pdf`);
+    } catch (err: any) {
+      console.error('PDF generation error:', err);
+      alert('Error during PDF generation: ' + err.message);
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
+  const handlePrintPaper = () => {
+    window.print();
+  };
+
   // 1. Initial Fetch (Hub, Quizzes)
   useEffect(() => {
     if (!user) return;
@@ -135,6 +351,7 @@ export const OrganizerDashboard: React.FC = () => {
         if (hubDoc.exists()) {
           const data = hubDoc.data() as Hub;
           setHub(data);
+          setHubData(data);
           setHubName(data.hubName);
           setLogoUrl(data.logoUrl);
           setPrimaryColor(data.primaryColor);
@@ -645,7 +862,8 @@ export const OrganizerDashboard: React.FC = () => {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8">
+    <div className="relative">
+      <div className="max-w-7xl mx-auto px-4 py-8 print:hidden">
       
       {/* SaaS Dashboard Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
@@ -1272,7 +1490,17 @@ export const OrganizerDashboard: React.FC = () => {
 
                   {/* Selected Quiz Questions List preview */}
                   <div className="bg-brand-card border border-brand-border rounded-2xl p-6 shadow-xs">
-                    <h4 className="text-sm font-extrabold text-brand-text mb-4">Questions Pool Preview ({questions.length})</h4>
+                    <div className="flex justify-between items-center mb-4">
+                      <h4 className="text-sm font-extrabold text-brand-text">Questions Pool Preview ({questions.length})</h4>
+                      <button
+                        onClick={handlePrintPaper}
+                        className="px-3 py-1.5 bg-brand-primary text-white text-3xs font-extrabold rounded-lg flex items-center gap-1.5 hover:bg-opacity-90 transition-all cursor-pointer shadow-sm hover:shadow"
+                        id="print-question-paper-btn"
+                      >
+                        <Printer className="h-3.5 w-3.5" />
+                        <span>Print Question Paper</span>
+                      </button>
+                    </div>
                     {questions.length === 0 ? (
                       <div className="text-center py-8 border border-dashed border-brand-border rounded-xl bg-brand-bg/10">
                         <p className="text-xs text-brand-muted">No questions saved. Input manually or drag a CSV above.</p>
@@ -1367,7 +1595,46 @@ export const OrganizerDashboard: React.FC = () => {
 
             {/* Live Data Grid */}
             {activeLiveQuizId ? (
-              <div className="bg-brand-card border border-brand-border rounded-2xl overflow-hidden shadow-xs">
+              <div className="space-y-6">
+                {/* 📋 Report PDF Settings */}
+                <div className="bg-brand-card border border-brand-border rounded-2xl p-6 shadow-xs">
+                  <h3 className="text-sm font-extrabold text-brand-text flex items-center gap-2 mb-4">
+                    <span>📋</span> Report PDF Settings
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-brand-text mb-1">Authorized Signatory Name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g., M Aqeel Afzal"
+                        value={reportSignatoryName}
+                        onChange={(e) => setReportSignatoryName(e.target.value)}
+                        className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-xs font-semibold text-brand-text focus:outline-none focus:border-brand-primary"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-brand-text mb-1">Designation / Department</label>
+                      <input
+                        type="text"
+                        placeholder="e.g., FOUNDER"
+                        value={reportDesignation}
+                        onChange={(e) => setReportDesignation(e.target.value)}
+                        className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-xs font-semibold text-brand-text focus:outline-none focus:border-brand-primary"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-4 flex">
+                    <button
+                      onClick={handleDownloadRankedReport}
+                      disabled={isGeneratingReport}
+                      className="px-4 py-2 bg-brand-primary text-white text-xs font-extrabold rounded-lg flex items-center gap-2 hover:bg-opacity-90 transition-all cursor-pointer shadow-md hover:shadow-lg disabled:opacity-50"
+                    >
+                      <span>📊</span> {isGeneratingReport ? 'Generating...' : 'Download Ranked Scoreboard (PDF)'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-brand-card border border-brand-border rounded-2xl overflow-hidden shadow-xs">
                 
                 <div className="px-6 py-4 bg-slate-50 border-b border-brand-border flex justify-between items-center flex-wrap gap-2">
                   <span className="text-xs font-extrabold text-brand-text uppercase tracking-wider">Live Synchronized Sessions ({liveAttempts.length})</span>
@@ -1511,6 +1778,7 @@ export const OrganizerDashboard: React.FC = () => {
                     </table>
                   </div>
                 )}
+              </div>
               </div>
             ) : (
               <div className="bg-brand-card border border-brand-border rounded-2xl p-16 text-center shadow-xs">
@@ -1785,6 +2053,72 @@ export const OrganizerDashboard: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
+
+      </div>
+
+      {/* Print Wrapper */}
+      {selectedQuiz && (
+        <div className="hidden print:block absolute inset-0 bg-white text-black p-8 z-[9999] min-h-screen">
+          {/* Header */}
+          <div className="flex justify-between items-center pb-6 border-b-2 border-black mb-8">
+            <div>
+              <h1 className="text-xl font-bold tracking-tight text-black">
+                {hubData?.hubName || hub?.hubName || hubName || 'Institution / Event'}
+              </h1>
+              <h2 className="text-2xl font-black text-black mt-2">
+                {selectedQuiz.title}
+              </h2>
+              <p className="text-sm text-gray-700 mt-1">
+                Official Question Paper - Total Questions: {questions.length} - Time: {selectedQuiz.timeLimit || 0} mins
+              </p>
+            </div>
+            {(hubData?.logoUrl || hub?.logoUrl || logoUrl) && (
+              <img
+                src={hubData?.logoUrl || hub?.logoUrl || logoUrl}
+                alt="Institution Logo"
+                className="h-16 max-w-[200px] object-contain"
+                referrerPolicy="no-referrer"
+              />
+            )}
+          </div>
+
+          {/* Questions List */}
+          <div className="space-y-6">
+            {questions.map((q, qIndex) => (
+              <div key={q.id || qIndex} className="break-inside-avoid">
+                <p className="font-bold text-base text-black mb-2">
+                  Q{qIndex + 1}. {q.text}
+                </p>
+                <div className="grid grid-cols-2 gap-x-8 gap-y-2 pl-6">
+                  {q.options.map((opt, oIdx) => (
+                    <div key={oIdx} className="text-sm text-gray-800">
+                      <span className="font-semibold mr-1">{String.fromCharCode(65 + oIdx)})</span>
+                      {opt}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Answer Key Page Break */}
+          <div style={{ pageBreakBefore: 'always', breakBefore: 'page' }} className="mt-12 pt-8 border-t-2 border-dashed border-gray-300">
+            <h2 className="text-xl font-bold text-black border-b border-black pb-2 mb-6">
+              Official Answer Key - {selectedQuiz.title}
+            </h2>
+            <div className="grid grid-cols-2 gap-x-8 gap-y-3">
+              {questions.map((q, qIndex) => (
+                <div key={q.id || qIndex} className="text-sm text-gray-800 flex items-start gap-1">
+                  <span className="font-bold whitespace-nowrap">Q{qIndex + 1}:</span>
+                  <span>
+                    Option <span className="font-bold text-black">{String.fromCharCode(65 + q.correctOption)}</span> - {q.options[q.correctOption]}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

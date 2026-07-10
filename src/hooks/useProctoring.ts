@@ -40,7 +40,6 @@ export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarning
 
     const handleContextMenu = (e: Event) => {
       e.preventDefault();
-      handleInfraction('Attempted Right Click');
     };
 
     // Attach strict listeners
