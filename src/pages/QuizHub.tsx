@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
@@ -510,6 +510,7 @@ export const QuizHub: React.FC = () => {
 
   // 5. Proctoring Logger Callbacks
   const logCheatFlag = async (flag: string) => {
+    if (isSubmittingRef.current) return;
     cheatFlagsRef.current.push(flag);
     if (!activeAttemptId) return;
     const path = `attempts/${activeAttemptId}`;
@@ -524,6 +525,7 @@ export const QuizHub: React.FC = () => {
   };
 
   const handleProctoringAutoSubmit = async (reason: string) => {
+    if (isSubmittingRef.current) return;
     setIsQuestionMutationsLocked(true);
     setWarningModalMessage(`PROCTORING LOCKOUT: ${reason}. Your quiz has been auto-submitted due to a security violation.`);
     setWarningModalOpen(true);
@@ -536,9 +538,11 @@ export const QuizHub: React.FC = () => {
     onCheatFlag: logCheatFlag,
     onAutoSubmit: handleProctoringAutoSubmit,
     onShowWarningModal: (msg) => {
+      if (isSubmittingRef.current) return;
       setWarningModalMessage(msg);
       setWarningModalOpen(true);
-    }
+    },
+    isSubmittingRef: isSubmittingRef
   });
 
   // Dismiss Warning Modal
@@ -634,9 +638,16 @@ export const QuizHub: React.FC = () => {
     }
   };
 
-  const submitQuiz = async (reason?: string) => {
-    await handleSubmitQuiz('Locked Out', true);
-  };
+  const submitQuiz = useCallback(async (isAutoSubmit = false, reason = '') => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+    try {
+      await handleSubmitQuiz('Locked Out', true);
+    } catch (err) {
+      isSubmittingRef.current = false;
+      throw err;
+    }
+  }, [handleSubmitQuiz]);
 
   const handleSkip = () => {
     if (currentQuestionIdx + 1 < quizQuestions.length) {

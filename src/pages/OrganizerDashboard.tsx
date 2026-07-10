@@ -119,6 +119,7 @@ export const OrganizerDashboard: React.FC = () => {
   const [reportSignatoryName, setReportSignatoryName] = useState('');
   const [reportDesignation, setReportDesignation] = useState('FOUNDER');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isDownloadingPaper, setIsDownloadingPaper] = useState(false);
 
   // Audit States
   const [auditAttempt, setAuditAttempt] = useState<Attempt | null>(null);
@@ -342,8 +343,83 @@ export const OrganizerDashboard: React.FC = () => {
     }
   };
 
-  const handlePrintPaper = () => {
-    window.print();
+  const handleDownloadQuestionPaper = async () => {
+    if (!selectedQuiz) return;
+    setIsDownloadingPaper(true);
+    const disabledSheets: any[] = [];
+    try {
+      // Temporarily disable stylesheets containing "oklch" to prevent html2canvas parsing errors
+      for (let i = 0; i < document.styleSheets.length; i++) {
+        const sheet = document.styleSheets[i];
+        try {
+          let hasOklch = false;
+          // We can read sheet.cssRules or sheet.rules if same-origin
+          const rules = sheet.cssRules || sheet.rules;
+          if (rules) {
+            for (let j = 0; j < rules.length; j++) {
+              if (rules[j].cssText && rules[j].cssText.includes('oklch')) {
+                hasOklch = true;
+                break;
+              }
+            }
+          }
+          if (hasOklch) {
+            sheet.disabled = true;
+            disabledSheets.push(sheet);
+          }
+        } catch (err) {
+          // Cross-origin stylesheets will throw SecurityError.
+          // Since we cannot read them, but they usually don't contain Tailwind/oklch, we just ignore.
+        }
+      }
+
+      const container = document.getElementById('question-paper-template');
+      if (!container) {
+        throw new Error('Template element not found');
+      }
+
+      // Capture canvas
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgWidth = 210; // mm
+      const pageHeight = 297; // mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      const safeTitle = selectedQuiz.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      pdf.save(`${safeTitle}_Question_Paper.pdf`);
+    } catch (err: any) {
+      console.error('PDF Question Paper generation error:', err);
+      alert('Error during PDF Question Paper generation: ' + err.message);
+    } finally {
+      // Restore disabled stylesheets
+      disabledSheets.forEach((sheet) => {
+        try {
+          sheet.disabled = false;
+        } catch (e) {
+          console.error('Failed to re-enable stylesheet:', e);
+        }
+      });
+      setIsDownloadingPaper(false);
+    }
   };
 
   const handleViewAudit = async (attempt: Attempt) => {
@@ -930,7 +1006,7 @@ export const OrganizerDashboard: React.FC = () => {
 
   return (
     <div className="relative">
-      <div className="max-w-7xl mx-auto px-4 py-8 print:hidden">
+      <div className="max-w-7xl mx-auto px-4 py-8">
       
       {/* SaaS Dashboard Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
@@ -1560,12 +1636,13 @@ export const OrganizerDashboard: React.FC = () => {
                     <div className="flex justify-between items-center mb-4">
                       <h4 className="text-sm font-extrabold text-brand-text">Questions Pool Preview ({questions.length})</h4>
                       <button
-                        onClick={handlePrintPaper}
-                        className="px-3 py-1.5 bg-brand-primary text-white text-3xs font-extrabold rounded-lg flex items-center gap-1.5 hover:bg-opacity-90 transition-all cursor-pointer shadow-sm hover:shadow"
+                        onClick={handleDownloadQuestionPaper}
+                        disabled={isDownloadingPaper || questions.length === 0}
+                        className="px-3 py-1.5 bg-brand-primary disabled:opacity-50 text-white text-3xs font-extrabold rounded-lg flex items-center gap-1.5 hover:bg-opacity-90 transition-all cursor-pointer shadow-sm hover:shadow"
                         id="print-question-paper-btn"
                       >
                         <Printer className="h-3.5 w-3.5" />
-                        <span>Print Question Paper</span>
+                        <span>{isDownloadingPaper ? 'Generating PDF...' : 'Print Question Paper'}</span>
                       </button>
                     </div>
                     {questions.length === 0 ? (
@@ -2281,43 +2358,54 @@ export const OrganizerDashboard: React.FC = () => {
 
       </div>
 
-      {/* Print Wrapper */}
+      {/* Hidden Question Paper Template for PDF Generation */}
       {selectedQuiz && (
-        <div className="hidden print:block absolute inset-0 bg-white text-black p-8 z-[9999] min-h-screen">
+        <div 
+          id="question-paper-template" 
+          className="absolute -left-[9999px] -top-[9999px]" 
+          style={{ 
+            color: '#000000', 
+            backgroundColor: '#ffffff',
+            fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            padding: '40px',
+            width: '800px',
+            boxSizing: 'border-box'
+          }}
+        >
           {/* Header */}
-          <div className="flex justify-between items-center pb-6 border-b-2 border-black mb-8">
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-black">
-                {hubData?.hubName || hub?.hubName || hubName || 'Institution / Event'}
-              </h1>
-              <h2 className="text-2xl font-black text-black mt-2">
-                {selectedQuiz.title}
-              </h2>
-              <p className="text-sm text-gray-700 mt-1">
-                Official Question Paper - Total Questions: {questions.length} - Time: {selectedQuiz.timeLimit || 0} mins
-              </p>
+          <div style={{ borderBottom: '2px solid #000000', paddingBottom: '24px', marginBottom: '32px', textAlign: 'center' }}>
+            <h1 style={{ fontSize: '24px', fontWeight: 'bold', textTransform: 'uppercase', color: '#000000', margin: '0 0 8px 0', letterSpacing: '0.05em' }}>
+              {hubData?.hubName || hub?.hubName || hubName || 'Institution / Event'}
+            </h1>
+            <h2 style={{ fontSize: '20px', fontWeight: '900', color: '#000000', margin: '0 0 8px 0' }}>
+              {selectedQuiz.title}
+            </h2>
+            <p style={{ fontSize: '14px', fontWeight: '600', color: '#374151', margin: '0' }}>
+              Official Question Paper - Total Questions: {questions.length} - Time: {selectedQuiz.timeLimit || 0} mins
+            </p>
+            
+            {/* Student info fields */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginTop: '24px', textAlign: 'left', maxWidth: '500px', marginLeft: 'auto', marginRight: 'auto', border: '1px solid #d1d5db', padding: '16px', borderRadius: '8px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#1f2937' }}>
+                Student Name: <span style={{ fontWeight: 'normal', color: '#9ca3af' }}>___________________________</span>
+              </div>
+              <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#1f2937' }}>
+                Roll No / CNIC: <span style={{ fontWeight: 'normal', color: '#9ca3af' }}>___________________________</span>
+              </div>
             </div>
-            {(hubData?.logoUrl || hub?.logoUrl || logoUrl) && (
-              <img
-                src={hubData?.logoUrl || hub?.logoUrl || logoUrl}
-                alt="Institution Logo"
-                className="h-16 max-w-[200px] object-contain"
-                referrerPolicy="no-referrer"
-              />
-            )}
           </div>
 
           {/* Questions List */}
-          <div className="space-y-6">
+          <div style={{ textAlign: 'left' }}>
             {questions.map((q, qIndex) => (
-              <div key={q.id || qIndex} className="break-inside-avoid">
-                <p className="font-bold text-base text-black mb-2">
+              <div key={q.id || qIndex} style={{ pageBreakInside: 'avoid', marginBottom: '24px', borderBottom: '1px solid #f3f4f6', paddingBottom: '16px' }}>
+                <p style={{ fontSize: '15px', fontWeight: 'bold', color: '#000000', margin: '0 0 12px 0', lineHeight: '1.4' }}>
                   Q{qIndex + 1}. {q.text}
                 </p>
-                <div className="grid grid-cols-2 gap-x-8 gap-y-2 pl-6">
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', paddingLeft: '24px' }}>
                   {q.options.map((opt, oIdx) => (
-                    <div key={oIdx} className="text-sm text-gray-800">
-                      <span className="font-semibold mr-1">{String.fromCharCode(65 + oIdx)})</span>
+                    <div key={oIdx} style={{ fontSize: '13px', color: '#1f2937' }}>
+                      <span style={{ fontWeight: 'bold', marginRight: '6px', color: '#000000' }}>{String.fromCharCode(65 + oIdx)})</span>
                       {opt}
                     </div>
                   ))}
@@ -2326,17 +2414,17 @@ export const OrganizerDashboard: React.FC = () => {
             ))}
           </div>
 
-          {/* Answer Key Page Break */}
-          <div style={{ pageBreakBefore: 'always', breakBefore: 'page' }} className="mt-12 pt-8 border-t-2 border-dashed border-gray-300">
-            <h2 className="text-xl font-bold text-black border-b border-black pb-2 mb-6">
-              Official Answer Key - {selectedQuiz.title}
+          {/* Answer Key Section */}
+          <div style={{ marginTop: '40px', paddingTop: '24px', borderTop: '2px dashed #9ca3af', pageBreakBefore: 'always' }}>
+            <h2 style={{ fontSize: '16px', fontWeight: 'bold', color: '#000000', borderBottom: '2px solid #000000', paddingBottom: '8px', marginBottom: '24px', textAlign: 'center', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 24px 0' }}>
+              Official Answer Key
             </h2>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-3">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: '32px', rowGap: '12px' }}>
               {questions.map((q, qIndex) => (
-                <div key={q.id || qIndex} className="text-sm text-gray-800 flex items-start gap-1">
-                  <span className="font-bold whitespace-nowrap">Q{qIndex + 1}:</span>
+                <div key={q.id || qIndex} style={{ fontSize: '13px', color: '#030712', display: 'flex', alignItems: 'flex-start', gap: '4px' }}>
+                  <span style={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Q{qIndex + 1}:</span>
                   <span>
-                    Option <span className="font-bold text-black">{String.fromCharCode(65 + q.correctOption)}</span> - {q.options[q.correctOption]}
+                    Option <span style={{ fontWeight: 'bold' }}>{String.fromCharCode(65 + q.correctOption)}</span> - {q.options[q.correctOption]}
                   </span>
                 </div>
               ))}

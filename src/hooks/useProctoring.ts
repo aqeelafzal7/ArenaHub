@@ -1,19 +1,21 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, RefObject } from 'react';
 
 interface ProctoringProps {
   active: boolean;
   onCheatFlag: (flag: string) => void;
   onAutoSubmit: (reason: string) => void;
   onShowWarningModal: (msg: string) => void;
+  isSubmittingRef?: RefObject<boolean>;
 }
 
-export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarningModal }: ProctoringProps) => {
+export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarningModal, isSubmittingRef }: ProctoringProps) => {
   const strikes = useRef(0);
 
   useEffect(() => {
     if (!active) return;
 
     const handleInfraction = (type: string) => {
+      if (isSubmittingRef?.current) return;
       // 1. Send log to Firestore Admin War Room
       onCheatFlag(type);
       
@@ -29,12 +31,14 @@ export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarning
     };
 
     const handleVisibilityChange = () => {
+      if (isSubmittingRef?.current) return;
       if (document.visibilityState === 'hidden') {
         handleInfraction('Tab Focus Lost');
       }
     };
 
     const handleBlur = () => {
+      if (isSubmittingRef?.current) return;
       handleInfraction('Window Focus Lost');
     };
 
