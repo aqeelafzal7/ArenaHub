@@ -582,6 +582,7 @@ export const QuizHub: React.FC = () => {
 
       const attemptDocRef = doc(db, 'attempts', activeAttemptId);
       const currentFlags = [...cheatFlagsRef.current];
+      const finalAnswers = { ...answers };
 
       const finalAttemptData: Attempt = {
         id: activeAttemptId,
@@ -596,6 +597,7 @@ export const QuizHub: React.FC = () => {
         passed: isPassed,
         cheatFlags: currentFlags,
         status: finalStatus,
+        studentAnswers: finalAnswers,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -606,6 +608,7 @@ export const QuizHub: React.FC = () => {
         timeSpentSeconds: secondsConsumed,
         passed: isPassed,
         status: finalStatus,
+        studentAnswers: finalAnswers,
         updatedAt: serverTimestamp()
       });
 

@@ -58,6 +58,7 @@ export interface Attempt {
   cheatFlags: string[];
   status: 'In Progress' | 'Submitted' | 'Locked Out';
   cameraStatus?: string;
+  studentAnswers?: Record<string, any>;
   createdAt: any;
   updatedAt: any;
 }

@@ -120,6 +120,12 @@ export const OrganizerDashboard: React.FC = () => {
   const [reportDesignation, setReportDesignation] = useState('FOUNDER');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
+  // Audit States
+  const [auditAttempt, setAuditAttempt] = useState<Attempt | null>(null);
+  const [auditQuestions, setAuditQuestions] = useState<Question[]>([]);
+  const [auditSecureAnswers, setAuditSecureAnswers] = useState<Record<string, string>>({});
+  const [isFetchingAudit, setIsFetchingAudit] = useState(false);
+
   // Helper: Format ISO string to datetime-local format (YYYY-MM-DDTHH:MM)
   const formatIsoForDatetimeLocal = (isoString?: string): string => {
     if (!isoString) return '';
@@ -338,6 +344,67 @@ export const OrganizerDashboard: React.FC = () => {
 
   const handlePrintPaper = () => {
     window.print();
+  };
+
+  const handleViewAudit = async (attempt: Attempt) => {
+    setIsFetchingAudit(true);
+    try {
+      // 1. Fetch the questions for this quiz: query(collection(db, 'quiz_questions'), where('quizId', '==', attempt.quizId))
+      let qList: Question[] = [];
+      try {
+        const qQuery = query(collection(db, 'quiz_questions'), where('quizId', '==', attempt.quizId));
+        const qSnap = await getDocs(qQuery);
+        qSnap.forEach((docSnap) => {
+          qList.push({ id: docSnap.id, ...docSnap.data() } as Question);
+        });
+      } catch (err) {
+        console.warn('Failed to fetch from quiz_questions', err);
+      }
+
+      // Fallback to "questions" if "quiz_questions" was empty
+      if (qList.length === 0) {
+        try {
+          const qQuery2 = query(collection(db, 'questions'), where('quizId', '==', attempt.quizId));
+          const qSnap2 = await getDocs(qQuery2);
+          qSnap2.forEach((docSnap) => {
+            qList.push({ id: docSnap.id, ...docSnap.data() } as Question);
+          });
+        } catch (err) {
+          console.error('Failed to fetch from questions fallback', err);
+        }
+      }
+
+      // 2. Fetch the secure answer key: getDoc(doc(db, 'quizzes_secure_answers', attempt.quizId))
+      const secureAnswers: Record<string, string> = {};
+      try {
+        const secureSnap = await getDoc(doc(db, 'quizzes_secure_answers', attempt.quizId));
+        if (secureSnap.exists()) {
+          const secureData = secureSnap.data();
+          const answersMap = secureData.answers || secureData || {};
+          Object.keys(answersMap).forEach((key) => {
+            secureAnswers[key] = String(answersMap[key]);
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to fetch quizzes_secure_answers', err);
+      }
+
+      // Fallback: use correctOption on question if not in secureAnswers
+      qList.forEach((q) => {
+        if (q.id && secureAnswers[q.id] === undefined) {
+          secureAnswers[q.id] = String(q.correctOption);
+        }
+      });
+
+      setAuditQuestions(qList);
+      setAuditSecureAnswers(secureAnswers);
+      setAuditAttempt(attempt);
+    } catch (err: any) {
+      console.error('Error fetching audit data:', err);
+      alert('Failed to retrieve student attempt details: ' + err.message);
+    } finally {
+      setIsFetchingAudit(false);
+    }
   };
 
   // 1. Initial Fetch (Hub, Quizzes)
@@ -1748,28 +1815,40 @@ export const OrganizerDashboard: React.FC = () => {
                               </td>
 
                               <td className="px-6 py-4">
-                                {attempt.status === 'In Progress' ? (
-                                  <button
-                                    onClick={async () => {
-                                      if (confirm("Are you sure you want to terminate this student's exam?")) {
-                                        try {
-                                          await updateDoc(doc(db, 'attempts', attempt.id), { 
-                                            forceLocked: true, 
-                                            cheatFlags: arrayUnion('Manually Terminated by Admin') 
-                                          });
-                                        } catch (err: any) {
-                                          console.error('Failed to terminate session:', err);
-                                          alert('Error force-terminating session: ' + err.message);
+                                <div className="flex items-center gap-2">
+                                  {attempt.status === 'In Progress' ? (
+                                    <button
+                                      onClick={async () => {
+                                        if (confirm("Are you sure you want to terminate this student's exam?")) {
+                                          try {
+                                            await updateDoc(doc(db, 'attempts', attempt.id), { 
+                                              forceLocked: true, 
+                                              cheatFlags: arrayUnion('Manually Terminated by Admin') 
+                                            });
+                                          } catch (err: any) {
+                                            console.error('Failed to terminate session:', err);
+                                            alert('Error force-terminating session: ' + err.message);
+                                          }
                                         }
-                                      }
-                                    }}
-                                    className="bg-red-600 hover:bg-red-700 text-white font-extrabold px-3 py-1.5 rounded text-[11px] shadow-xs cursor-pointer transition-colors"
+                                      }}
+                                      className="bg-red-600 hover:bg-red-700 text-white font-extrabold px-3 py-1.5 rounded text-[11px] shadow-xs cursor-pointer transition-colors"
+                                    >
+                                      Force Terminate
+                                    </button>
+                                  ) : (
+                                    <span className="text-brand-muted font-bold text-[11px]">Terminated</span>
+                                  )}
+
+                                  <button
+                                    onClick={() => handleViewAudit(attempt)}
+                                    disabled={isFetchingAudit}
+                                    className="px-3 py-1.5 bg-brand-primary disabled:opacity-50 text-white text-[11px] font-extrabold rounded-md flex items-center gap-1 hover:bg-opacity-90 transition-all cursor-pointer shadow-sm hover:shadow"
+                                    title="Inspect Answers"
                                   >
-                                    Force Terminate
+                                    <Eye className="h-3.5 w-3.5" />
+                                    <span>{isFetchingAudit && auditAttempt?.id === attempt.id ? 'Loading...' : 'Inspect Answers'}</span>
                                   </button>
-                                ) : (
-                                  <span className="text-brand-muted font-bold text-[11px]">Terminated</span>
-                                )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -2049,6 +2128,152 @@ export const OrganizerDashboard: React.FC = () => {
                 </div>
               </div>
 
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Student Attempt Audit Modal */}
+      <AnimatePresence>
+        {auditAttempt && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[999] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-brand-card border border-brand-border rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
+            >
+              {/* Header */}
+              <div className="p-6 border-b border-brand-border flex justify-between items-center bg-brand-bg/50">
+                <div>
+                  <h3 className="text-lg font-black text-brand-text flex items-center gap-2">
+                    <Eye className="h-5 w-5 text-brand-primary" />
+                    Student Attempt Audit
+                  </h3>
+                  <div className="text-xs text-brand-muted mt-1 space-y-0.5">
+                    <div>
+                      Candidate: <strong className="text-brand-text">{auditAttempt.userName}</strong> ({auditAttempt.userEmail}) 
+                      <span className="mx-2">|</span> CNIC: <strong className="text-brand-text">{auditAttempt.userCnic}</strong>
+                    </div>
+                    <div>
+                      Score: <strong className="text-brand-primary">{auditAttempt.score} Points</strong> ({auditAttempt.passed ? 'PASSED' : 'FAILED'})
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAuditAttempt(null)}
+                  className="p-1.5 hover:bg-brand-bg rounded-lg text-brand-muted hover:text-brand-text transition-colors cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 overflow-y-auto space-y-4 flex-1">
+                {auditQuestions.length === 0 ? (
+                  <div className="text-center py-12 text-brand-muted text-sm">
+                    No questions found for this quiz.
+                  </div>
+                ) : (
+                  auditQuestions.map((q, index) => {
+                    const studentAnsVal = auditAttempt.studentAnswers?.[q.id || ''];
+                    const correctAnsVal = auditSecureAnswers[q.id || ''];
+                    
+                    // Determine if correct
+                    const isCorrect = studentAnsVal !== undefined && String(studentAnsVal) === String(correctAnsVal);
+                    
+                    return (
+                      <div 
+                        key={q.id || index} 
+                        className={`p-4 rounded-xl border transition-all ${
+                          isCorrect 
+                            ? 'bg-emerald-500/5 border-emerald-500/30 text-brand-text' 
+                            : 'bg-rose-500/5 border-rose-500/30 text-brand-text'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold whitespace-nowrap uppercase ${
+                            isCorrect ? 'bg-emerald-500/20 text-emerald-600' : 'bg-rose-500/20 text-rose-600'
+                          }`}>
+                            Q{index + 1} - {isCorrect ? 'Correct' : 'Incorrect'}
+                          </span>
+                          <p className="font-bold text-sm text-brand-text">{q.text}</p>
+                        </div>
+
+                        {/* Options list for review */}
+                        <div className="mt-3 pl-8 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {q.options.map((opt, oIdx) => {
+                            const isSelected = studentAnsVal !== undefined && String(studentAnsVal) === String(oIdx);
+                            const isThisCorrect = correctAnsVal !== undefined && String(correctAnsVal) === String(oIdx);
+                            
+                            return (
+                              <div 
+                                key={oIdx} 
+                                className={`text-xs p-2 rounded-lg border ${
+                                  isSelected && isThisCorrect
+                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 font-bold'
+                                    : isSelected
+                                    ? 'bg-rose-500/15 border-rose-500/40 text-rose-700 font-bold'
+                                    : isThisCorrect
+                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 font-semibold'
+                                    : 'bg-brand-bg/40 border-brand-border text-brand-muted'
+                                }`}
+                              >
+                                <span className="font-black mr-1">{String.fromCharCode(65 + oIdx)})</span>
+                                {opt}
+                                {isSelected && <span className="ml-1.5 text-[10px] font-extrabold">(Selected)</span>}
+                                {isThisCorrect && <span className="ml-1.5 text-[10px] font-extrabold">(Correct Answer)</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Summary of answers */}
+                        <div className="mt-3 pt-3 border-t border-brand-border/40 text-xs flex flex-col gap-1 pl-8">
+                          <div>
+                            <span className="text-brand-muted">Student's Selection: </span>
+                            <span className={isCorrect ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                              {studentAnsVal !== undefined ? (
+                                typeof studentAnsVal === 'number' || !isNaN(Number(studentAnsVal)) ? (
+                                  `Option ${String.fromCharCode(65 + Number(studentAnsVal))} - ${q.options[Number(studentAnsVal)] || ''}`
+                                ) : (
+                                  String(studentAnsVal)
+                                )
+                              ) : (
+                                'Skipped / Unanswered'
+                              )}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-brand-muted">Correct Answer: </span>
+                            <span className="text-emerald-600 font-bold">
+                              {correctAnsVal !== undefined ? (
+                                typeof correctAnsVal === 'number' || !isNaN(Number(correctAnsVal)) ? (
+                                  `Option ${String.fromCharCode(65 + Number(correctAnsVal))} - ${q.options[Number(correctAnsVal)] || ''}`
+                                ) : (
+                                  String(correctAnsVal)
+                                )
+                              ) : (
+                                `Option ${String.fromCharCode(65 + q.correctOption)} - ${q.options[q.correctOption] || ''}`
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-brand-border flex justify-end bg-brand-bg/30">
+                <button
+                  onClick={() => setAuditAttempt(null)}
+                  className="px-4 py-2 bg-brand-bg border border-brand-border text-brand-text font-bold text-xs rounded-xl hover:bg-brand-border transition-colors cursor-pointer"
+                >
+                  Close Audit View
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
