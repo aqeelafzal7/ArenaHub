@@ -125,6 +125,33 @@ export const QuizHub: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Legal-Grade Telemetry States
+  const [ipAddress, setIpAddress] = useState<string>('Fetching...');
+  const [deviceInfo, setDeviceInfo] = useState<string>('Unknown Device');
+  const [exactStartTime, setExactStartTime] = useState<string>('');
+
+  // Fetch Telemetry on Mount
+  useEffect(() => {
+    // Fetch IP address
+    fetch('https://api.ipify.org?format=json')
+      .then((r) => r.json())
+      .then((data) => setIpAddress(data.ip || 'Unavailable'))
+      .catch(() => setIpAddress('Unavailable'));
+
+    // Determine OS and Device Type from navigator.userAgent
+    const ua = navigator.userAgent;
+    let os = 'Unknown OS';
+    if (/Windows/i.test(ua)) os = 'Windows';
+    else if (/Macintosh|Mac OS X/i.test(ua)) os = 'macOS';
+    else if (/Linux/i.test(ua)) os = 'Linux';
+    else if (/Android/i.test(ua)) os = 'Android';
+    else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(ua);
+    const deviceType = isMobile ? 'Mobile' : 'Desktop';
+    setDeviceInfo(`${os} - ${deviceType}`);
+  }, []);
+
   // 1. Fetch Hub branding
   const handleLoadHub = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -271,6 +298,9 @@ export const QuizHub: React.FC = () => {
 
     setLoading(true);
 
+    const startTimeISO = new Date().toISOString();
+    setExactStartTime(startTimeISO);
+
     const attemptId = doc(collection(db, 'attempts')).id;
     const path = `attempts/${attemptId}`;
 
@@ -288,6 +318,9 @@ export const QuizHub: React.FC = () => {
       cheatFlags: [],
       status: 'In Progress',
       cameraStatus: cameraStatus,
+      ipAddress: ipAddress,
+      deviceInfo: deviceInfo,
+      startedAt: startTimeISO,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -602,6 +635,10 @@ export const QuizHub: React.FC = () => {
         cheatFlags: currentFlags,
         status: finalStatus,
         studentAnswers: finalAnswers,
+        ipAddress: ipAddress,
+        deviceInfo: deviceInfo,
+        startedAt: exactStartTime,
+        submittedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -613,6 +650,10 @@ export const QuizHub: React.FC = () => {
         passed: isPassed,
         status: finalStatus,
         studentAnswers: finalAnswers,
+        ipAddress: ipAddress,
+        deviceInfo: deviceInfo,
+        startedAt: exactStartTime,
+        submittedAt: new Date().toISOString(),
         updatedAt: serverTimestamp()
       });
 

@@ -59,6 +59,10 @@ export interface Attempt {
   status: 'In Progress' | 'Submitted' | 'Locked Out';
   cameraStatus?: string;
   studentAnswers?: Record<string, any>;
+  ipAddress?: string;
+  deviceInfo?: string;
+  startedAt?: string;
+  submittedAt?: string;
   createdAt: any;
   updatedAt: any;
 }

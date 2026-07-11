@@ -120,6 +120,7 @@ export const OrganizerDashboard: React.FC = () => {
   const [reportDesignation, setReportDesignation] = useState('FOUNDER');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isDownloadingPaper, setIsDownloadingPaper] = useState(false);
+  const [isDownloadingAudit, setIsDownloadingAudit] = useState(false);
 
   // Audit States
   const [auditAttempt, setAuditAttempt] = useState<Attempt | null>(null);
@@ -140,14 +141,57 @@ export const OrganizerDashboard: React.FC = () => {
     }
   };
 
+  const formatForensicTime = (isoString?: string): string => {
+    if (!isoString) return 'N/A';
+    try {
+      const date = new Date(isoString);
+      if (isNaN(date.getTime())) return 'N/A';
+      return date.toLocaleString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      });
+    } catch {
+      return 'N/A';
+    }
+  };
+
   const handleDownloadRankedReport = async () => {
     if (!activeLiveQuizId) return;
     
     const activeQuizObj = quizzes.find(q => q.id === activeLiveQuizId);
     const quizTitle = activeQuizObj ? activeQuizObj.title : 'Quiz Event';
+    const disabledSheets: any[] = [];
 
     try {
       setIsGeneratingReport(true);
+      // Temporarily disable stylesheets containing modern color functions to prevent html2canvas parsing errors
+      for (let i = 0; i < document.styleSheets.length; i++) {
+        const sheet = document.styleSheets[i];
+        try {
+          let hasUnsupportedColor = false;
+          const rules = sheet.cssRules || sheet.rules;
+          if (rules) {
+            for (let j = 0; j < rules.length; j++) {
+              const txt = rules[j].cssText;
+              if (txt && (txt.includes('okl') || txt.includes('color-mix') || txt.includes('hwb'))) {
+                hasUnsupportedColor = true;
+                break;
+              }
+            }
+          }
+          if (hasUnsupportedColor) {
+            sheet.disabled = true;
+            disabledSheets.push(sheet);
+          }
+        } catch (err) {
+          // Cross-origin stylesheets
+        }
+      }
       // 1. Fetch questions dynamically to get precise total questions count
       const qQuery = query(collection(db, 'questions'), where('quizId', '==', activeLiveQuizId));
       const questionsSnap = await getDocs(qQuery);
@@ -184,6 +228,22 @@ export const OrganizerDashboard: React.FC = () => {
       const primaryThemeColor = hubData?.primaryColor || primaryColor || '#0284c7';
       const secondaryThemeColor = hubData?.secondaryColor || secondaryColor || '#4f46e5';
 
+      const formatToTimeOnly = (isoString?: string): string => {
+        if (!isoString) return 'N/A';
+        try {
+          const date = new Date(isoString);
+          if (isNaN(date.getTime())) return 'N/A';
+          return date.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+          });
+        } catch {
+          return 'N/A';
+        }
+      };
+
       const rowsHtml = sortedAttempts.map((attempt, index) => {
         const rank = index + 1;
         const timeSpent = attempt.timeSpentSeconds;
@@ -215,8 +275,10 @@ export const OrganizerDashboard: React.FC = () => {
               <div style="font-size: 13px; font-weight: 700; color: #0f172a;">${attempt.userName || 'N/A'}</div>
               <div style="font-size: 10px; color: #64748b; font-family: monospace; margin-top: 2px;">CNIC: ${attempt.userCnic || 'N/A'}</div>
             </td>
-            <td style="padding: 14px 10px; font-size: 13px; color: #334155; text-align: center;">
-              ${timeStr}
+            <td style="padding: 14px 10px; text-align: center;">
+              <div style="font-size: 13px; color: #334155; font-weight: 700;">${timeStr}</div>
+              <div style="font-size: 9px; color: #64748b; margin-top: 4px; line-height: 1.2;">Joined: ${formatToTimeOnly(attempt.startedAt)}</div>
+              <div style="font-size: 9px; color: #64748b; line-height: 1.2;">Left: ${formatToTimeOnly(attempt.submittedAt)}</div>
             </td>
             <td style="padding: 14px 10px; text-align: center;">
               <span style="font-size: 12px; font-weight: 700; color: #16a34a; background: #f0fdf4; padding: 2px 6px; border-radius: 4px;">${correct} Correct</span>
@@ -339,6 +401,14 @@ export const OrganizerDashboard: React.FC = () => {
       console.error('PDF generation error:', err);
       alert('Error during PDF generation: ' + err.message);
     } finally {
+      // Restore disabled stylesheets
+      disabledSheets.forEach((sheet) => {
+        try {
+          sheet.disabled = false;
+        } catch (e) {
+          console.error('Failed to re-enable stylesheet:', e);
+        }
+      });
       setIsGeneratingReport(false);
     }
   };
@@ -348,28 +418,27 @@ export const OrganizerDashboard: React.FC = () => {
     setIsDownloadingPaper(true);
     const disabledSheets: any[] = [];
     try {
-      // Temporarily disable stylesheets containing "oklch" to prevent html2canvas parsing errors
+      // Temporarily disable stylesheets containing modern color functions to prevent html2canvas parsing errors
       for (let i = 0; i < document.styleSheets.length; i++) {
         const sheet = document.styleSheets[i];
         try {
-          let hasOklch = false;
-          // We can read sheet.cssRules or sheet.rules if same-origin
+          let hasUnsupportedColor = false;
           const rules = sheet.cssRules || sheet.rules;
           if (rules) {
             for (let j = 0; j < rules.length; j++) {
-              if (rules[j].cssText && rules[j].cssText.includes('oklch')) {
-                hasOklch = true;
+              const txt = rules[j].cssText;
+              if (txt && (txt.includes('okl') || txt.includes('color-mix') || txt.includes('hwb'))) {
+                hasUnsupportedColor = true;
                 break;
               }
             }
           }
-          if (hasOklch) {
+          if (hasUnsupportedColor) {
             sheet.disabled = true;
             disabledSheets.push(sheet);
           }
         } catch (err) {
           // Cross-origin stylesheets will throw SecurityError.
-          // Since we cannot read them, but they usually don't contain Tailwind/oklch, we just ignore.
         }
       }
 
@@ -419,6 +488,156 @@ export const OrganizerDashboard: React.FC = () => {
         }
       });
       setIsDownloadingPaper(false);
+    }
+  };
+
+  const handleDownloadAuditPDF = async () => {
+    if (!auditAttempt) return;
+    setIsDownloadingAudit(true);
+    const disabledSheets: any[] = [];
+    try {
+      // Temporarily disable stylesheets containing modern color functions to prevent html2canvas parsing errors
+      for (let i = 0; i < document.styleSheets.length; i++) {
+        const sheet = document.styleSheets[i];
+        try {
+          let hasUnsupportedColor = false;
+          const rules = sheet.cssRules || sheet.rules;
+          if (rules) {
+            for (let j = 0; j < rules.length; j++) {
+              const txt = rules[j].cssText;
+              if (txt && (txt.includes('okl') || txt.includes('color-mix') || txt.includes('hwb'))) {
+                hasUnsupportedColor = true;
+                break;
+              }
+            }
+          }
+          if (hasUnsupportedColor) {
+            sheet.disabled = true;
+            disabledSheets.push(sheet);
+          }
+        } catch (err) {
+          // Cross-origin stylesheets
+        }
+      }
+
+      const container = document.getElementById('audit-print-container');
+      if (!container) {
+        throw new Error('Audit print container not found');
+      }
+
+      // Store original styles to restore later
+      const originalHeight = container.style.height;
+      const originalMaxHeight = container.style.maxHeight;
+      const originalOverflow = container.style.overflow;
+      const originalBackground = container.style.backgroundColor;
+      const originalColor = container.style.color;
+
+      // Temporarily apply style overrides for clean white paper document look
+      container.style.height = 'auto';
+      container.style.maxHeight = 'none';
+      container.style.overflow = 'visible';
+      container.style.backgroundColor = '#ffffff';
+      container.style.color = '#000000';
+
+      const styleTag = document.createElement('style');
+      styleTag.innerHTML = `
+        #audit-print-container, #audit-print-container * {
+          color: #000000 !important;
+          border-color: #e5e7eb !important;
+        }
+        #audit-print-container {
+          background-color: #ffffff !important;
+        }
+        #audit-print-container .text-emerald-700, #audit-print-container .text-emerald-700 * {
+          color: #047857 !important;
+        }
+        #audit-print-container .text-rose-700, #audit-print-container .text-rose-700 * {
+          color: #be123c !important;
+        }
+        #audit-print-container .text-emerald-600, #audit-print-container .text-emerald-600 * {
+          color: #059669 !important;
+        }
+        #audit-print-container .text-rose-600, #audit-print-container .text-rose-600 * {
+          color: #e11d48 !important;
+        }
+        #audit-print-container .bg-emerald-500\\/5 {
+          background-color: #f0fdf4 !important;
+        }
+        #audit-print-container .bg-rose-500\\/5 {
+          background-color: #fff1f2 !important;
+        }
+        #audit-print-container .bg-emerald-500\\/15 {
+          background-color: #d1fae5 !important;
+        }
+        #audit-print-container .bg-rose-500\\/15 {
+          background-color: #ffe4e6 !important;
+        }
+        #audit-print-container .bg-emerald-500\\/20 {
+          background-color: #a7f3d0 !important;
+        }
+        #audit-print-container .bg-rose-500\\/20 {
+          background-color: #fecdd3 !important;
+        }
+        #audit-print-container .bg-emerald-500\\/10 {
+          background-color: #ecfdf5 !important;
+        }
+        #audit-print-container .bg-brand-bg\\/40 {
+          background-color: #f9fafb !important;
+        }
+        #audit-print-container .text-brand-muted {
+          color: #4b5563 !important;
+        }
+      `;
+      document.head.appendChild(styleTag);
+
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+
+      // Restore style tag and styles immediately
+      styleTag.remove();
+      container.style.height = originalHeight;
+      container.style.maxHeight = originalMaxHeight;
+      container.style.overflow = originalOverflow;
+      container.style.backgroundColor = originalBackground;
+      container.style.color = originalColor;
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgWidth = 210; // mm
+      const pageHeight = 297; // mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      const safeName = auditAttempt.userName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      pdf.save(`${safeName}_Audit_Report.pdf`);
+    } catch (err: any) {
+      console.error('PDF Audit Report generation error:', err);
+      alert('Error during PDF Audit Report generation: ' + err.message);
+    } finally {
+      // Restore disabled stylesheets
+      disabledSheets.forEach((sheet) => {
+        try {
+          sheet.disabled = false;
+        } catch (e) {
+          console.error('Failed to re-enable stylesheet:', e);
+        }
+      });
+      setIsDownloadingAudit(false);
     }
   };
 
@@ -2220,130 +2439,161 @@ export const OrganizerDashboard: React.FC = () => {
               exit={{ opacity: 0, scale: 0.95 }}
               className="bg-brand-card border border-brand-border rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
             >
-              {/* Header */}
-              <div className="p-6 border-b border-brand-border flex justify-between items-center bg-brand-bg/50">
-                <div>
-                  <h3 className="text-lg font-black text-brand-text flex items-center gap-2">
-                    <Eye className="h-5 w-5 text-brand-primary" />
-                    Student Attempt Audit
-                  </h3>
-                  <div className="text-xs text-brand-muted mt-1 space-y-0.5">
-                    <div>
-                      Candidate: <strong className="text-brand-text">{auditAttempt.userName}</strong> ({auditAttempt.userEmail}) 
-                      <span className="mx-2">|</span> CNIC: <strong className="text-brand-text">{auditAttempt.userCnic}</strong>
-                    </div>
-                    <div>
-                      Score: <strong className="text-brand-primary">{auditAttempt.score} Points</strong> ({auditAttempt.passed ? 'PASSED' : 'FAILED'})
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setAuditAttempt(null)}
-                  className="p-1.5 hover:bg-brand-bg rounded-lg text-brand-muted hover:text-brand-text transition-colors cursor-pointer"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              {/* Body */}
-              <div className="p-6 overflow-y-auto space-y-4 flex-1">
-                {auditQuestions.length === 0 ? (
-                  <div className="text-center py-12 text-brand-muted text-sm">
-                    No questions found for this quiz.
-                  </div>
-                ) : (
-                  auditQuestions.map((q, index) => {
-                    const studentAnsVal = auditAttempt.studentAnswers?.[q.id || ''];
-                    const correctAnsVal = auditSecureAnswers[q.id || ''];
-                    
-                    // Determine if correct
-                    const isCorrect = studentAnsVal !== undefined && String(studentAnsVal) === String(correctAnsVal);
-                    
-                    return (
-                      <div 
-                        key={q.id || index} 
-                        className={`p-4 rounded-xl border transition-all ${
-                          isCorrect 
-                            ? 'bg-emerald-500/5 border-emerald-500/30 text-brand-text' 
-                            : 'bg-rose-500/5 border-rose-500/30 text-brand-text'
-                        }`}
-                      >
-                        <div className="flex items-start gap-2">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold whitespace-nowrap uppercase ${
-                            isCorrect ? 'bg-emerald-500/20 text-emerald-600' : 'bg-rose-500/20 text-rose-600'
-                          }`}>
-                            Q{index + 1} - {isCorrect ? 'Correct' : 'Incorrect'}
-                          </span>
-                          <p className="font-bold text-sm text-brand-text">{q.text}</p>
-                        </div>
-
-                        {/* Options list for review */}
-                        <div className="mt-3 pl-8 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {q.options.map((opt, oIdx) => {
-                            const isSelected = studentAnsVal !== undefined && String(studentAnsVal) === String(oIdx);
-                            const isThisCorrect = correctAnsVal !== undefined && String(correctAnsVal) === String(oIdx);
-                            
-                            return (
-                              <div 
-                                key={oIdx} 
-                                className={`text-xs p-2 rounded-lg border ${
-                                  isSelected && isThisCorrect
-                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 font-bold'
-                                    : isSelected
-                                    ? 'bg-rose-500/15 border-rose-500/40 text-rose-700 font-bold'
-                                    : isThisCorrect
-                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 font-semibold'
-                                    : 'bg-brand-bg/40 border-brand-border text-brand-muted'
-                                }`}
-                              >
-                                <span className="font-black mr-1">{String.fromCharCode(65 + oIdx)})</span>
-                                {opt}
-                                {isSelected && <span className="ml-1.5 text-[10px] font-extrabold">(Selected)</span>}
-                                {isThisCorrect && <span className="ml-1.5 text-[10px] font-extrabold">(Correct Answer)</span>}
-                              </div>
-                            );
-                          })}
-                        </div>
-
-                        {/* Summary of answers */}
-                        <div className="mt-3 pt-3 border-t border-brand-border/40 text-xs flex flex-col gap-1 pl-8">
+              <div id="audit-print-container" className="flex flex-col flex-1 overflow-y-auto bg-brand-card text-brand-text">
+                {/* Header */}
+                <div className="p-6 border-b border-brand-border flex justify-between items-center bg-brand-bg/50">
+                  <div>
+                    <h3 className="text-lg font-black text-brand-text flex items-center gap-2">
+                      <Eye className="h-5 w-5 text-brand-primary" />
+                      Student Attempt Audit
+                    </h3>
+                    <div className="text-xs text-brand-muted mt-1 space-y-0.5">
+                      <div>
+                        Candidate: <strong className="text-brand-text">{auditAttempt.userName}</strong> ({auditAttempt.userEmail}) 
+                        <span className="mx-2">|</span> CNIC: <strong className="text-brand-text">{auditAttempt.userCnic}</strong>
+                      </div>
+                      <div>
+                        Score: <strong className="text-brand-primary">{auditAttempt.score} Points</strong> ({auditAttempt.passed ? 'PASSED' : 'FAILED'})
+                      </div>
+                      
+                      {/* Forensic Metadata Section */}
+                      <div className="mt-3 pt-3 border-t border-brand-border/30">
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-brand-primary block mb-1">
+                          Forensic Metadata
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-brand-muted">
                           <div>
-                            <span className="text-brand-muted">Student's Selection: </span>
-                            <span className={isCorrect ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                              {studentAnsVal !== undefined ? (
-                                typeof studentAnsVal === 'number' || !isNaN(Number(studentAnsVal)) ? (
-                                  `Option ${String.fromCharCode(65 + Number(studentAnsVal))} - ${q.options[Number(studentAnsVal)] || ''}`
-                                ) : (
-                                  String(studentAnsVal)
-                                )
-                              ) : (
-                                'Skipped / Unanswered'
-                              )}
-                            </span>
+                            <strong>Device OS/Type:</strong> <span className="text-brand-text">{auditAttempt.deviceInfo || 'N/A'}</span>
                           </div>
                           <div>
-                            <span className="text-brand-muted">Correct Answer: </span>
-                            <span className="text-emerald-600 font-bold">
-                              {correctAnsVal !== undefined ? (
-                                typeof correctAnsVal === 'number' || !isNaN(Number(correctAnsVal)) ? (
-                                  `Option ${String.fromCharCode(65 + Number(correctAnsVal))} - ${q.options[Number(correctAnsVal)] || ''}`
-                                ) : (
-                                  String(correctAnsVal)
-                                )
-                              ) : (
-                                `Option ${String.fromCharCode(65 + q.correctOption)} - ${q.options[q.correctOption] || ''}`
-                              )}
-                            </span>
+                            <strong>Network IP:</strong> <span className="text-brand-text">{auditAttempt.ipAddress || 'N/A'}</span>
+                          </div>
+                          <div>
+                            <strong>Session Started:</strong> <span className="text-brand-text">{formatForensicTime(auditAttempt.startedAt)}</span>
+                          </div>
+                          <div>
+                            <strong>Session Ended:</strong> <span className="text-brand-text">{formatForensicTime(auditAttempt.submittedAt)}</span>
                           </div>
                         </div>
                       </div>
-                    );
-                  })
-                )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setAuditAttempt(null)}
+                    className="p-1.5 hover:bg-brand-bg rounded-lg text-brand-muted hover:text-brand-text transition-colors cursor-pointer print-hidden"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div className="p-6 space-y-4 flex-1">
+                  {auditQuestions.length === 0 ? (
+                    <div className="text-center py-12 text-brand-muted text-sm">
+                      No questions found for this quiz.
+                    </div>
+                  ) : (
+                    auditQuestions.map((q, index) => {
+                      const studentAnsVal = auditAttempt.studentAnswers?.[q.id || ''];
+                      const correctAnsVal = auditSecureAnswers[q.id || ''];
+                      
+                      // Determine if correct
+                      const isCorrect = studentAnsVal !== undefined && String(studentAnsVal) === String(correctAnsVal);
+                      
+                      return (
+                        <div 
+                          key={q.id || index} 
+                          className={`p-4 rounded-xl border transition-all ${
+                            isCorrect 
+                              ? 'bg-emerald-500/5 border-emerald-500/30 text-brand-text' 
+                              : 'bg-rose-500/5 border-rose-500/30 text-brand-text'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold whitespace-nowrap uppercase ${
+                              isCorrect ? 'bg-emerald-500/20 text-emerald-600' : 'bg-rose-500/20 text-rose-600'
+                            }`}>
+                              Q{index + 1} - {isCorrect ? 'Correct' : 'Incorrect'}
+                            </span>
+                            <p className="font-bold text-sm text-brand-text">{q.text}</p>
+                          </div>
+
+                          {/* Options list for review */}
+                          <div className="mt-3 pl-8 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {q.options.map((opt, oIdx) => {
+                              const isSelected = studentAnsVal !== undefined && String(studentAnsVal) === String(oIdx);
+                              const isThisCorrect = correctAnsVal !== undefined && String(correctAnsVal) === String(oIdx);
+                              
+                              return (
+                                <div 
+                                  key={oIdx} 
+                                  className={`text-xs p-2 rounded-lg border ${
+                                    isSelected && isThisCorrect
+                                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 font-bold'
+                                      : isSelected
+                                      ? 'bg-rose-500/15 border-rose-500/40 text-rose-700 font-bold'
+                                      : isThisCorrect
+                                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 font-semibold'
+                                      : 'bg-brand-bg/40 border-brand-border text-brand-muted'
+                                  }`}
+                                >
+                                  <span className="font-black mr-1">{String.fromCharCode(65 + oIdx)})</span>
+                                  {opt}
+                                  {isSelected && <span className="ml-1.5 text-[10px] font-extrabold">(Selected)</span>}
+                                  {isThisCorrect && <span className="ml-1.5 text-[10px] font-extrabold">(Correct Answer)</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Summary of answers */}
+                          <div className="mt-3 pt-3 border-t border-brand-border/40 text-xs flex flex-col gap-1 pl-8">
+                            <div>
+                              <span className="text-brand-muted">Student's Selection: </span>
+                              <span className={isCorrect ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                {studentAnsVal !== undefined ? (
+                                  typeof studentAnsVal === 'number' || !isNaN(Number(studentAnsVal)) ? (
+                                    `Option ${String.fromCharCode(65 + Number(studentAnsVal))} - ${q.options[Number(studentAnsVal)] || ''}`
+                                  ) : (
+                                    String(studentAnsVal)
+                                  )
+                                ) : (
+                                  'Skipped / Unanswered'
+                                )}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-brand-muted">Correct Answer: </span>
+                              <span className="text-emerald-600 font-bold">
+                                {correctAnsVal !== undefined ? (
+                                  typeof correctAnsVal === 'number' || !isNaN(Number(correctAnsVal)) ? (
+                                    `Option ${String.fromCharCode(65 + Number(correctAnsVal))} - ${q.options[Number(correctAnsVal)] || ''}`
+                                  ) : (
+                                    String(correctAnsVal)
+                                  )
+                                ) : (
+                                  `Option ${String.fromCharCode(65 + q.correctOption)} - ${q.options[q.correctOption] || ''}`
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
 
               {/* Footer */}
-              <div className="p-4 border-t border-brand-border flex justify-end bg-brand-bg/30">
+              <div className="p-4 border-t border-brand-border flex justify-end gap-3 bg-brand-bg/30">
+                <button
+                  onClick={handleDownloadAuditPDF}
+                  disabled={isDownloadingAudit}
+                  className="px-4 py-2 bg-brand-primary disabled:opacity-50 text-white font-bold text-xs rounded-xl hover:bg-opacity-90 transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm hover:shadow"
+                >
+                  <FileText className="h-4 w-4" />
+                  <span>{isDownloadingAudit ? 'Generating PDF...' : 'Download Forensic Audit (PDF)'}</span>
+                </button>
                 <button
                   onClick={() => setAuditAttempt(null)}
                   className="px-4 py-2 bg-brand-bg border border-brand-border text-brand-text font-bold text-xs rounded-xl hover:bg-brand-border transition-colors cursor-pointer"
