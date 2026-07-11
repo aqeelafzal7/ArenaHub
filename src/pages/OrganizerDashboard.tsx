@@ -165,33 +165,9 @@ export const OrganizerDashboard: React.FC = () => {
     
     const activeQuizObj = quizzes.find(q => q.id === activeLiveQuizId);
     const quizTitle = activeQuizObj ? activeQuizObj.title : 'Quiz Event';
-    const disabledSheets: any[] = [];
 
     try {
       setIsGeneratingReport(true);
-      // Temporarily disable stylesheets containing modern color functions to prevent html2canvas parsing errors
-      for (let i = 0; i < document.styleSheets.length; i++) {
-        const sheet = document.styleSheets[i];
-        try {
-          let hasUnsupportedColor = false;
-          const rules = sheet.cssRules || sheet.rules;
-          if (rules) {
-            for (let j = 0; j < rules.length; j++) {
-              const txt = rules[j].cssText;
-              if (txt && (txt.includes('okl') || txt.includes('color-mix') || txt.includes('hwb'))) {
-                hasUnsupportedColor = true;
-                break;
-              }
-            }
-          }
-          if (hasUnsupportedColor) {
-            sheet.disabled = true;
-            disabledSheets.push(sheet);
-          }
-        } catch (err) {
-          // Cross-origin stylesheets
-        }
-      }
       // 1. Fetch questions dynamically to get precise total questions count
       const qQuery = query(collection(db, 'questions'), where('quizId', '==', activeLiveQuizId));
       const questionsSnap = await getDocs(qQuery);
@@ -372,7 +348,13 @@ export const OrganizerDashboard: React.FC = () => {
         scale: 2,
         useCORS: true,
         logging: false,
-        backgroundColor: '#ffffff'
+        backgroundColor: '#ffffff',
+        onclone: (clonedDoc) => {
+          const styles = clonedDoc.querySelectorAll('style');
+          styles.forEach(s => {
+            s.innerHTML = s.innerHTML.replace(/oklch/gi, 'rgb').replace(/color-mix/gi, 'rgb').replace(/oklab/gi, 'rgb').replace(/hwb/gi, 'rgb');
+          });
+        }
       });
 
       document.body.removeChild(container);
@@ -401,14 +383,6 @@ export const OrganizerDashboard: React.FC = () => {
       console.error('PDF generation error:', err);
       alert('Error during PDF generation: ' + err.message);
     } finally {
-      // Restore disabled stylesheets
-      disabledSheets.forEach((sheet) => {
-        try {
-          sheet.disabled = false;
-        } catch (e) {
-          console.error('Failed to re-enable stylesheet:', e);
-        }
-      });
       setIsGeneratingReport(false);
     }
   };
@@ -416,32 +390,7 @@ export const OrganizerDashboard: React.FC = () => {
   const handleDownloadQuestionPaper = async () => {
     if (!selectedQuiz) return;
     setIsDownloadingPaper(true);
-    const disabledSheets: any[] = [];
     try {
-      // Temporarily disable stylesheets containing modern color functions to prevent html2canvas parsing errors
-      for (let i = 0; i < document.styleSheets.length; i++) {
-        const sheet = document.styleSheets[i];
-        try {
-          let hasUnsupportedColor = false;
-          const rules = sheet.cssRules || sheet.rules;
-          if (rules) {
-            for (let j = 0; j < rules.length; j++) {
-              const txt = rules[j].cssText;
-              if (txt && (txt.includes('okl') || txt.includes('color-mix') || txt.includes('hwb'))) {
-                hasUnsupportedColor = true;
-                break;
-              }
-            }
-          }
-          if (hasUnsupportedColor) {
-            sheet.disabled = true;
-            disabledSheets.push(sheet);
-          }
-        } catch (err) {
-          // Cross-origin stylesheets will throw SecurityError.
-        }
-      }
-
       const container = document.getElementById('question-paper-template');
       if (!container) {
         throw new Error('Template element not found');
@@ -452,7 +401,13 @@ export const OrganizerDashboard: React.FC = () => {
         scale: 2,
         useCORS: true,
         logging: false,
-        backgroundColor: '#ffffff'
+        backgroundColor: '#ffffff',
+        onclone: (clonedDoc) => {
+          const styles = clonedDoc.querySelectorAll('style');
+          styles.forEach(s => {
+            s.innerHTML = s.innerHTML.replace(/oklch/gi, 'rgb').replace(/color-mix/gi, 'rgb').replace(/oklab/gi, 'rgb').replace(/hwb/gi, 'rgb');
+          });
+        }
       });
 
       const imgData = canvas.toDataURL('image/png');
@@ -479,14 +434,6 @@ export const OrganizerDashboard: React.FC = () => {
       console.error('PDF Question Paper generation error:', err);
       alert('Error during PDF Question Paper generation: ' + err.message);
     } finally {
-      // Restore disabled stylesheets
-      disabledSheets.forEach((sheet) => {
-        try {
-          sheet.disabled = false;
-        } catch (e) {
-          console.error('Failed to re-enable stylesheet:', e);
-        }
-      });
       setIsDownloadingPaper(false);
     }
   };
@@ -494,149 +441,49 @@ export const OrganizerDashboard: React.FC = () => {
   const handleDownloadAuditPDF = async () => {
     if (!auditAttempt) return;
     setIsDownloadingAudit(true);
-    const disabledSheets: any[] = [];
     try {
-      // Temporarily disable stylesheets containing modern color functions to prevent html2canvas parsing errors
-      for (let i = 0; i < document.styleSheets.length; i++) {
-        const sheet = document.styleSheets[i];
-        try {
-          let hasUnsupportedColor = false;
-          const rules = sheet.cssRules || sheet.rules;
-          if (rules) {
-            for (let j = 0; j < rules.length; j++) {
-              const txt = rules[j].cssText;
-              if (txt && (txt.includes('okl') || txt.includes('color-mix') || txt.includes('hwb'))) {
-                hasUnsupportedColor = true;
-                break;
-              }
-            }
-          }
-          if (hasUnsupportedColor) {
-            sheet.disabled = true;
-            disabledSheets.push(sheet);
-          }
-        } catch (err) {
-          // Cross-origin stylesheets
-        }
-      }
-
-      const container = document.getElementById('audit-print-container');
+      const container = document.getElementById('hidden-audit-pdf-template');
       if (!container) {
         throw new Error('Audit print container not found');
       }
-
-      // Store original styles to restore later
-      const originalHeight = container.style.height;
-      const originalMaxHeight = container.style.maxHeight;
-      const originalOverflow = container.style.overflow;
-      const originalBackground = container.style.backgroundColor;
-      const originalColor = container.style.color;
-
-      // Temporarily apply style overrides for clean white paper document look
-      container.style.height = 'auto';
-      container.style.maxHeight = 'none';
-      container.style.overflow = 'visible';
-      container.style.backgroundColor = '#ffffff';
-      container.style.color = '#000000';
-
-      const styleTag = document.createElement('style');
-      styleTag.innerHTML = `
-        #audit-print-container, #audit-print-container * {
-          color: #000000 !important;
-          border-color: #e5e7eb !important;
-        }
-        #audit-print-container {
-          background-color: #ffffff !important;
-        }
-        #audit-print-container .text-emerald-700, #audit-print-container .text-emerald-700 * {
-          color: #047857 !important;
-        }
-        #audit-print-container .text-rose-700, #audit-print-container .text-rose-700 * {
-          color: #be123c !important;
-        }
-        #audit-print-container .text-emerald-600, #audit-print-container .text-emerald-600 * {
-          color: #059669 !important;
-        }
-        #audit-print-container .text-rose-600, #audit-print-container .text-rose-600 * {
-          color: #e11d48 !important;
-        }
-        #audit-print-container .bg-emerald-500\\/5 {
-          background-color: #f0fdf4 !important;
-        }
-        #audit-print-container .bg-rose-500\\/5 {
-          background-color: #fff1f2 !important;
-        }
-        #audit-print-container .bg-emerald-500\\/15 {
-          background-color: #d1fae5 !important;
-        }
-        #audit-print-container .bg-rose-500\\/15 {
-          background-color: #ffe4e6 !important;
-        }
-        #audit-print-container .bg-emerald-500\\/20 {
-          background-color: #a7f3d0 !important;
-        }
-        #audit-print-container .bg-rose-500\\/20 {
-          background-color: #fecdd3 !important;
-        }
-        #audit-print-container .bg-emerald-500\\/10 {
-          background-color: #ecfdf5 !important;
-        }
-        #audit-print-container .bg-brand-bg\\/40 {
-          background-color: #f9fafb !important;
-        }
-        #audit-print-container .text-brand-muted {
-          color: #4b5563 !important;
-        }
-      `;
-      document.head.appendChild(styleTag);
 
       const canvas = await html2canvas(container, {
         scale: 2,
         useCORS: true,
         logging: false,
-        backgroundColor: '#ffffff'
+        backgroundColor: '#ffffff',
+        onclone: (clonedDoc) => {
+          const styles = clonedDoc.querySelectorAll('style');
+          styles.forEach(s => {
+            s.innerHTML = s.innerHTML.replace(/oklch/gi, 'rgb').replace(/color-mix/gi, 'rgb').replace(/oklab/gi, 'rgb').replace(/hwb/gi, 'rgb');
+          });
+        }
       });
-
-      // Restore style tag and styles immediately
-      styleTag.remove();
-      container.style.height = originalHeight;
-      container.style.maxHeight = originalMaxHeight;
-      container.style.overflow = originalOverflow;
-      container.style.backgroundColor = originalBackground;
-      container.style.color = originalColor;
 
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const imgWidth = 210; // mm
+      const margin = 10;
+      const imgWidth = 210 - (margin * 2); // mm
       const pageHeight = 297; // mm
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
       let heightLeft = imgHeight;
-      let position = 0;
+      let position = margin;
 
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
+      pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
+      heightLeft -= (pageHeight - margin * 2);
 
       while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
+        position = heightLeft - imgHeight + margin; // Add margin for subsequent pages
         pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
+        pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
+        heightLeft -= (pageHeight - margin * 2);
       }
 
-      const safeName = auditAttempt.userName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      pdf.save(`${safeName}_Audit_Report.pdf`);
+      pdf.save(`${auditAttempt.userId}_Forensic_Audit.pdf`);
     } catch (err: any) {
       console.error('PDF Audit Report generation error:', err);
       alert('Error during PDF Audit Report generation: ' + err.message);
     } finally {
-      // Restore disabled stylesheets
-      disabledSheets.forEach((sheet) => {
-        try {
-          sheet.disabled = false;
-        } catch (e) {
-          console.error('Failed to re-enable stylesheet:', e);
-        }
-      });
       setIsDownloadingAudit(false);
     }
   };
@@ -2679,6 +2526,124 @@ export const OrganizerDashboard: React.FC = () => {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden Forensic Audit Template for PDF Generation */}
+      {auditAttempt && (
+        <div 
+          id="hidden-audit-pdf-template" 
+          className="absolute -left-[9999px] -top-[9999px]"
+          style={{ 
+            color: '#000000', 
+            backgroundColor: '#ffffff',
+            fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            padding: '40px',
+            width: '800px',
+            boxSizing: 'border-box'
+          }}
+        >
+          {/* Header */}
+          <div style={{ borderBottom: '2px solid #000000', paddingBottom: '24px', marginBottom: '32px', textAlign: 'center' }}>
+            <h1 style={{ fontSize: '24px', fontWeight: 'bold', textTransform: 'uppercase', color: '#000000', margin: '0 0 8px 0', letterSpacing: '0.05em' }}>Official Forensic Audit Report</h1>
+            <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#1f2937', margin: '0 0 4px 0' }}>{hubData?.hubName || hub?.hubName || hubName || 'Institution / Event'}</h2>
+            <h3 style={{ fontSize: '16px', color: '#4b5563', margin: '0' }}>{quizTitle}</h3>
+          </div>
+
+          {/* Candidate & Telemetry Grid */}
+          <div style={{ marginBottom: '32px', border: '1px solid #d1d5db', borderRadius: '4px', overflow: 'hidden', fontSize: '14px' }}>
+            <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+              <tbody>
+                <tr>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px', backgroundColor: '#f9fafb', fontWeight: 'bold', width: '25%' }}>Candidate Name</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px', width: '25%' }}>{auditAttempt.userName || 'N/A'}</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px', backgroundColor: '#f9fafb', fontWeight: 'bold', width: '25%' }}>CNIC</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', padding: '12px', width: '25%' }}>{auditAttempt.userCnic || 'N/A'}</td>
+                </tr>
+                <tr>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px', backgroundColor: '#f9fafb', fontWeight: 'bold' }}>Email</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px' }}>{auditAttempt.userEmail || 'N/A'}</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px', backgroundColor: '#f9fafb', fontWeight: 'bold' }}>Score / Status</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', padding: '12px' }}>
+                    <span style={{ fontWeight: 'bold' }}>{auditAttempt.score} Points</span>
+                    <span style={{ margin: '0 8px' }}>|</span>
+                    {auditAttempt.passed ? 'PASSED' : 'FAILED'}
+                  </td>
+                </tr>
+                <tr>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px', backgroundColor: '#f9fafb', fontWeight: 'bold' }}>Device OS/Type</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px' }}>{auditAttempt.deviceInfo || 'N/A'}</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', padding: '12px', backgroundColor: '#f9fafb', fontWeight: 'bold' }}>Network IP</td>
+                  <td style={{ borderBottom: '1px solid #d1d5db', padding: '12px' }}>{auditAttempt.ipAddress || 'N/A'}</td>
+                </tr>
+                <tr>
+                  <td style={{ borderRight: '1px solid #d1d5db', padding: '12px', backgroundColor: '#f9fafb', fontWeight: 'bold' }}>Session Started</td>
+                  <td style={{ borderRight: '1px solid #d1d5db', padding: '12px' }}>{formatForensicTime(auditAttempt.startedAt)}</td>
+                  <td style={{ borderRight: '1px solid #d1d5db', padding: '12px', backgroundColor: '#f9fafb', fontWeight: 'bold' }}>Session Ended</td>
+                  <td style={{ padding: '12px' }}>{formatForensicTime(auditAttempt.submittedAt)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Q&A Breakdown Section */}
+          <div>
+            <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #d1d5db', paddingBottom: '8px' }}>Question & Answer Breakdown</h3>
+            {auditQuestions.map((q, index) => {
+              const studentAnsVal = auditAttempt.studentAnswers?.[q.id || ''];
+              const correctAnsVal = auditSecureAnswers[q.id || ''];
+              const isCorrect = studentAnsVal !== undefined && String(studentAnsVal) === String(correctAnsVal);
+              
+              let studentAnsText = 'Skipped / No Answer';
+              if (studentAnsVal !== undefined) {
+                if (typeof studentAnsVal === 'number' || !isNaN(Number(studentAnsVal))) {
+                  studentAnsText = `Option ${String.fromCharCode(65 + Number(studentAnsVal))} - ${q.options[Number(studentAnsVal)] || ''}`;
+                } else {
+                  studentAnsText = String(studentAnsVal);
+                }
+              }
+
+              let correctAnsText = 'Unknown';
+              if (correctAnsVal !== undefined) {
+                if (typeof correctAnsVal === 'number' || !isNaN(Number(correctAnsVal))) {
+                  correctAnsText = `Option ${String.fromCharCode(65 + Number(correctAnsVal))} - ${q.options[Number(correctAnsVal)] || ''}`;
+                } else {
+                  correctAnsText = String(correctAnsVal);
+                }
+              } else {
+                correctAnsText = `Option ${String.fromCharCode(65 + q.correctOption)} - ${q.options[q.correctOption] || ''}`;
+              }
+
+              return (
+                <div key={q.id || index} style={{ marginBottom: '24px', pageBreakInside: 'avoid' }}>
+                  <p style={{ fontWeight: 'bold', fontSize: '18px', margin: '24px 0 8px 0' }}>Q{index + 1}: {q.text}</p>
+                  
+                  <div style={{ marginLeft: '20px', marginBottom: '12px' }}>
+                    {q.options.map((opt, i) => (
+                      <p key={i} style={{ fontSize: '16px', margin: '0 0 4px 0', color: '#374151' }}>
+                        {String.fromCharCode(65 + i)}) {opt}
+                      </p>
+                    ))}
+                  </div>
+
+                  <div style={{ marginLeft: '20px', backgroundColor: '#f9fafb', padding: '12px', borderLeft: '4px solid #9ca3af' }}>
+                    <p style={{ margin: '0 0 4px 0', fontSize: '14px' }}>
+                      <span style={{ fontWeight: 'bold' }}>Candidate's Selection:</span> {studentAnsText} 
+                      <span style={{ marginLeft: '8px', fontWeight: 'bold', color: isCorrect ? '#16a34a' : '#dc2626' }}>
+                        {studentAnsVal !== undefined ? (isCorrect ? '(✔️ CORRECT)' : '(❌ INCORRECT)') : ''}
+                      </span>
+                    </p>
+                    <p style={{ margin: '0', fontSize: '14px' }}>
+                      <span style={{ fontWeight: 'bold' }}>Official Answer Key:</span> {correctAnsText}
+                    </p>
+                  </div>
+                  {index < auditQuestions.length - 1 && (
+                    <hr style={{ margin: '24px 0', border: 'none', borderTop: '1px solid #e5e7eb' }} />
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
