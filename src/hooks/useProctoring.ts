@@ -14,6 +14,12 @@ export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarning
   useEffect(() => {
     if (!active) return;
 
+    let isUnloading = false;
+
+    const handleBeforeUnload = () => {
+      isUnloading = true;
+    };
+
     const handleInfraction = (type: string) => {
       if (isSubmittingRef?.current) return;
       // 1. Send log to Firestore Admin War Room
@@ -31,6 +37,7 @@ export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarning
     };
 
     const handleVisibilityChange = () => {
+      if (isUnloading) return;
       if (isSubmittingRef?.current) return;
       if (document.visibilityState === 'hidden') {
         handleInfraction('Tab Focus Lost');
@@ -38,6 +45,7 @@ export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarning
     };
 
     const handleBlur = () => {
+      if (isUnloading) return;
       if (isSubmittingRef?.current) return;
       handleInfraction('Window Focus Lost');
     };
@@ -47,15 +55,17 @@ export const useProctoring = ({ active, onCheatFlag, onAutoSubmit, onShowWarning
     };
 
     // Attach strict listeners
+    window.addEventListener('beforeunload', handleBeforeUnload);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleBlur);
     document.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
       // Cleanup on unmount
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleBlur);
       document.removeEventListener('contextmenu', handleContextMenu);
     };
-  }, [active, onCheatFlag, onAutoSubmit, onShowWarningModal]);
+  }, [active, onCheatFlag, onAutoSubmit, onShowWarningModal, isSubmittingRef]);
 };

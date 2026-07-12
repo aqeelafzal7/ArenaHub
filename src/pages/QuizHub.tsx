@@ -25,7 +25,8 @@ import {
   Lock, 
   X, 
   CornerDownLeft, 
-  BookOpen 
+  BookOpen,
+  RefreshCw
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import * as tf from '@tensorflow/tfjs';
@@ -73,6 +74,8 @@ function shuffleArray<T>(array: T[]): T[] {
   return arr;
 }
 
+const GAS_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzYw0GXrK2VPraB_fh3lT0gJr2EXF53I9HMKP0rkWN-rG_NTYfdXIzUfP-nwT9ftHoE/exec';
+
 export const QuizHub: React.FC = () => {
   const { user, profile, theme, isQuizStarted, setIsQuizStarted } = useAuth();
   const isColorblind = theme === 'colorblind';
@@ -89,6 +92,37 @@ export const QuizHub: React.FC = () => {
   const setAndRefStream = (newStream: MediaStream | null) => {
     setStream(newStream);
     streamRef.current = newStream;
+  };
+
+  const captureAndUploadSnapshot = async (filenameLabel: string): Promise<string | null> => {
+    if (!videoRef.current || !canvasRef.current || !streamRef.current) return null;
+
+    try {
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+      if (!context) return null;
+
+      // Draw current video stream frame onto hidden canvas
+      context.drawImage(videoRef.current, 0, 0, 640, 480);
+
+      // Convert to highly compressed, efficient JPEG text stream (0.6 quality)
+      const base64Image = canvas.toDataURL('image/jpeg', 0.6);
+      const filename = `${profile?.name || 'Candidate'}_${filenameLabel}_${Date.now()}.jpg`;
+
+      // Post payload to our 5TB Google Drive bridge
+      const response = await fetch(GAS_WEBHOOK_URL, {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'Content-Type': 'text/plain' }, // Avoid CORS preflight validation issues
+        body: JSON.stringify({ image: base64Image, filename: filename })
+      });
+
+      const result = await response.json();
+      return result.success ? result.url : null;
+    } catch (err) {
+      console.error('Forensic upload to Google Drive failed:', err);
+      return null;
+    }
   };
 
   // Search/Access States
@@ -113,6 +147,8 @@ export const QuizHub: React.FC = () => {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const isSubmittingRef = useRef(false);
   const cheatFlagsRef = useRef<string[]>([]);
+  const lastUploadTimeRef = useRef<number>(0);
+  const hasTakenMarketingShotRef = useRef(false);
 
   // Proctoring Alert Modal States
   const [warningModalOpen, setWarningModalOpen] = useState(false);
@@ -130,6 +166,13 @@ export const QuizHub: React.FC = () => {
   const [ipAddress, setIpAddress] = useState<string>('Fetching...');
   const [deviceInfo, setDeviceInfo] = useState<string>('Unknown Device');
   const [exactStartTime, setExactStartTime] = useState<string>('');
+
+  const handleSoftRefresh = () => {
+    const savedAnswers = localStorage.getItem('arena_saved_answers');
+    if (savedAnswers) {
+      setAnswers(JSON.parse(savedAnswers));
+    }
+  };
 
   // Fetch Telemetry on Mount
   useEffect(() => {
@@ -644,6 +687,24 @@ export const QuizHub: React.FC = () => {
                 cheatFlags: arrayUnion('AI Flag: Cell Phone Detected')
               });
               setAiWarning('Warning: Suspicious activity detected by camera.');
+
+              const now = Date.now();
+              if (now - lastUploadTimeRef.current > 45000) { // 45-second throttling lock
+                lastUploadTimeRef.current = now;
+                
+                // Capture image asynchronously
+                captureAndUploadSnapshot('Phone_Violation').then(async (driveUrl) => {
+                  if (driveUrl) {
+                    const logMsg = `AI Flag: Cell Phone Detected [Proof Link: ${driveUrl}]`;
+                    
+                    // Update firestore attempt log dynamically
+                    await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                      cheatFlags: arrayUnion(logMsg),
+                      updatedAt: serverTimestamp()
+                    });
+                  }
+                });
+              }
             }
 
             // 2. Detect multiple faces (blazeface)
@@ -654,6 +715,24 @@ export const QuizHub: React.FC = () => {
                 cheatFlags: arrayUnion('AI Flag: Multiple People Detected')
               });
               setAiWarning('Warning: Suspicious activity detected by camera.');
+
+              const now = Date.now();
+              if (now - lastUploadTimeRef.current > 45000) { // 45-second throttling lock
+                lastUploadTimeRef.current = now;
+                
+                // Capture image asynchronously
+                captureAndUploadSnapshot('MultiFace_Violation').then(async (driveUrl) => {
+                  if (driveUrl) {
+                    const logMsg = `AI Flag: Multiple People Detected [Proof Link: ${driveUrl}]`;
+                    
+                    // Update firestore attempt log dynamically
+                    await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                      cheatFlags: arrayUnion(logMsg),
+                      updatedAt: serverTimestamp()
+                    });
+                  }
+                });
+              }
             }
           } catch (err) {
             console.error('AI Frame detection evaluation error:', err);
@@ -690,6 +769,33 @@ export const QuizHub: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [aiWarning]);
+
+  // Silent Marketing & Social Verification Snapshot
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId) {
+      hasTakenMarketingShotRef.current = false;
+      return;
+    }
+
+    // Set a random delay between 2 to 4 minutes into the exam
+    const randomDelay = Math.floor(Math.random() * 120000) + 120000;
+
+    const marketingTimer = setTimeout(() => {
+      if (hasTakenMarketingShotRef.current) return;
+      hasTakenMarketingShotRef.current = true;
+
+      captureAndUploadSnapshot('Social_Verification').then(async (driveUrl) => {
+        if (driveUrl) {
+          await updateDoc(doc(db, 'attempts', activeAttemptId), {
+            marketingImages: arrayUnion(driveUrl),
+            updatedAt: serverTimestamp()
+          });
+        }
+      });
+    }, randomDelay);
+
+    return () => clearTimeout(marketingTimer);
+  }, [isQuizStarted, activeAttemptId]);
 
   // 4. Timer effect & Scheduled window breach check
   useEffect(() => {
@@ -832,6 +938,7 @@ export const QuizHub: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
+      <canvas ref={canvasRef} className="hidden" width={640} height={480} />
       
       {/* 1. PORTAL ACCESS (HUB ENTRY SCREEN) */}
       {!activeHub && !finalAttempt && (
@@ -1120,14 +1227,24 @@ export const QuizHub: React.FC = () => {
               </div>
             </div>
 
-            {/* Timer widget */}
-            <div className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs animate-bounce ${
-              isColorblind 
-                ? 'bg-blue-100 border border-blue-300 text-blue-900' 
-                : 'bg-red-50 border border-red-200 text-red-800'
-            }`}>
-              <Timer className="h-5 w-5" />
-              {Math.floor(timeLeft / 60)}:{(timeLeft % 60) < 10 ? '0' : ''}{timeLeft % 60}
+            {/* Timer & Refresh widget */}
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={handleSoftRefresh} 
+                title="Soft Refresh Room"
+                className="p-2 rounded-xl border border-brand-border bg-brand-bg hover:bg-brand-primary/10 transition-colors cursor-pointer group"
+              >
+                <RefreshCw className="h-5 w-5 text-brand-muted group-hover:text-brand-primary transition-colors"/>
+              </button>
+
+              <div className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs animate-bounce ${
+                isColorblind 
+                  ? 'bg-blue-100 border border-blue-300 text-blue-900' 
+                  : 'bg-red-50 border border-red-200 text-red-800'
+              }`}>
+                <Timer className="h-5 w-5" />
+                {Math.floor(timeLeft / 60)}:{(timeLeft % 60) < 10 ? '0' : ''}{timeLeft % 60}
+              </div>
             </div>
           </div>
 
