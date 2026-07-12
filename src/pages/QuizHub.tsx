@@ -148,7 +148,7 @@ export const QuizHub: React.FC = () => {
   const isSubmittingRef = useRef(false);
   const cheatFlagsRef = useRef<string[]>([]);
   const lastUploadTimeRef = useRef<number>(0);
-  const hasTakenMarketingShotRef = useRef(false);
+  const compulsoryShotsTakenRef = useRef(0);
 
   // Proctoring Alert Modal States
   const [warningModalOpen, setWarningModalOpen] = useState(false);
@@ -770,21 +770,25 @@ export const QuizHub: React.FC = () => {
     }
   }, [aiWarning]);
 
-  // Silent Marketing & Social Verification Snapshot
+  // Compulsory Verification Snapshots (5 shots spaced evenly)
   useEffect(() => {
-    if (!isQuizStarted || !activeAttemptId) {
-      hasTakenMarketingShotRef.current = false;
+    if (!isQuizStarted || !activeAttemptId || !activeQuiz) {
+      compulsoryShotsTakenRef.current = 0;
       return;
     }
 
-    // Set a random delay between 2 to 4 minutes into the exam
-    const randomDelay = Math.floor(Math.random() * 120000) + 120000;
+    const intervalMs = (activeQuiz.timeLimit * 60 * 1000) / 6;
 
-    const marketingTimer = setTimeout(() => {
-      if (hasTakenMarketingShotRef.current) return;
-      hasTakenMarketingShotRef.current = true;
-
-      captureAndUploadSnapshot('Social_Verification').then(async (driveUrl) => {
+    const snapshotInterval = setInterval(() => {
+      if (compulsoryShotsTakenRef.current >= 5) {
+        clearInterval(snapshotInterval);
+        return;
+      }
+      
+      compulsoryShotsTakenRef.current += 1;
+      const currentShotNumber = compulsoryShotsTakenRef.current;
+      
+      captureAndUploadSnapshot(`Compulsory_Verification_V${currentShotNumber}`).then(async (driveUrl) => {
         if (driveUrl) {
           await updateDoc(doc(db, 'attempts', activeAttemptId), {
             marketingImages: arrayUnion(driveUrl),
@@ -792,10 +796,10 @@ export const QuizHub: React.FC = () => {
           });
         }
       });
-    }, randomDelay);
-
-    return () => clearTimeout(marketingTimer);
-  }, [isQuizStarted, activeAttemptId]);
+    }, intervalMs);
+    
+    return () => clearInterval(snapshotInterval);
+  }, [isQuizStarted, activeAttemptId, activeQuiz]);
 
   // 4. Timer effect & Scheduled window breach check
   useEffect(() => {
