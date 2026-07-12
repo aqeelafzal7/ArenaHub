@@ -83,6 +83,7 @@ export const QuizHub: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const aiIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [aiWarning, setAiWarning] = useState<string | null>(null);
 
   const setAndRefStream = (newStream: MediaStream | null) => {
@@ -151,6 +152,96 @@ export const QuizHub: React.FC = () => {
     const deviceType = isMobile ? 'Mobile' : 'Desktop';
     setDeviceInfo(`${os} - ${deviceType}`);
   }, []);
+
+  // Session Hydration on Mount / Auth state resolution
+  useEffect(() => {
+    const hydrateActiveSession = async () => {
+      if (!user) return;
+      const cached = localStorage.getItem('arena_active_session');
+      if (!cached) return;
+
+      try {
+        setLoading(true);
+        const session = JSON.parse(cached);
+        const { hubId, quizId, attemptId, startedAt } = session;
+
+        // Fetch attempt
+        const attemptDoc = await getDoc(doc(db, 'attempts', attemptId));
+        if (!attemptDoc.exists()) {
+          // Stale cache
+          localStorage.removeItem('arena_active_session');
+          localStorage.removeItem('arena_saved_answers');
+          return;
+        }
+
+        const attemptData = attemptDoc.data() as Attempt;
+        if (attemptData.status !== 'In Progress') {
+          // Already submitted or locked out
+          localStorage.removeItem('arena_active_session');
+          localStorage.removeItem('arena_saved_answers');
+          return;
+        }
+
+        // Fetch Hub and Quiz
+        const [hubDoc, quizDoc] = await Promise.all([
+          getDoc(doc(db, 'hubs', hubId)),
+          getDoc(doc(db, 'quizzes', quizId))
+        ]);
+
+        if (!hubDoc.exists() || !quizDoc.exists()) {
+          return;
+        }
+
+        const hubData = hubDoc.data() as Hub;
+        const quizData = quizDoc.data() as Quiz;
+
+        // Fetch Questions pool
+        const qQuery = query(collection(db, 'questions'), where('quizId', '==', quizId));
+        const questionsSnap = await getDocs(qQuery);
+        let qList: Question[] = [];
+        questionsSnap.forEach((docSnap) => {
+          const q = docSnap.data() as Question;
+          const shuffledOptions = q.options ? shuffleArray(q.options) : [];
+          qList.push({
+            ...q,
+            options: shuffledOptions,
+          });
+        });
+        
+        qList = shuffleArray(qList);
+
+        // Restore States
+        setActiveHub(hubData);
+        setActiveQuiz(quizData);
+        setQuizQuestions(qList);
+        setActiveAttemptId(attemptId);
+        setExactStartTime(startedAt);
+
+        // Calculate exact remaining time
+        const elapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+        const remaining = Math.max(0, (quizData.timeLimit * 60) - elapsed);
+        setTimeLeft(remaining);
+
+        // Restore saved answers
+        const savedAnswersStr = localStorage.getItem('arena_saved_answers');
+        if (savedAnswersStr) {
+          try {
+            setAnswers(JSON.parse(savedAnswersStr));
+          } catch (e) {
+            console.error('Error parsing saved answers:', e);
+          }
+        }
+
+        setIsQuizStarted(true);
+      } catch (err) {
+        console.error('Error hydrating active session:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    hydrateActiveSession();
+  }, [user]);
 
   // 1. Fetch Hub branding
   const handleLoadHub = async (e: React.FormEvent) => {
@@ -304,6 +395,8 @@ export const QuizHub: React.FC = () => {
     const attemptId = doc(collection(db, 'attempts')).id;
     const path = `attempts/${attemptId}`;
 
+    const finalCameraStatus = cameraStatus === 'Requesting...' ? 'Hardware Initialization Timeout' : cameraStatus;
+
     const newAttempt: Attempt = {
       id: attemptId,
       hubId: activeHub.id,
@@ -317,7 +410,7 @@ export const QuizHub: React.FC = () => {
       passed: false,
       cheatFlags: [],
       status: 'In Progress',
-      cameraStatus: cameraStatus,
+      cameraStatus: finalCameraStatus,
       ipAddress: ipAddress,
       deviceInfo: deviceInfo,
       startedAt: startTimeISO,
@@ -333,6 +426,13 @@ export const QuizHub: React.FC = () => {
         updatedAt: serverTimestamp()
       });
 
+      localStorage.setItem('arena_active_session', JSON.stringify({
+        hubId: activeHub.id,
+        quizId: activeQuiz.id,
+        attemptId: attemptId,
+        startedAt: startTimeISO
+      }));
+
       setActiveAttemptId(attemptId);
       setTimeLeft(activeQuiz.timeLimit * 60);
       setIsQuizStarted(true);
@@ -344,247 +444,21 @@ export const QuizHub: React.FC = () => {
       setWarningModalOpen(false);
     } catch (err: any) {
       setError(err.message || 'Failed to initialize proctored session.');
+      if (streamRef.current) {
+        try {
+          streamRef.current.getTracks().forEach(t => t.stop());
+        } catch (e) {
+          console.error('Error stopping tracks on start error:', e);
+        }
+      }
+      setAndRefStream(null);
     } finally {
       setLoading(false);
     }
   };
 
-  // Camera & stream lifecycle hooks
-  useEffect(() => {
-    const isAtInstructions = activeHub && activeQuiz && !isQuizStarted && !finalAttempt;
-    const isTaking = activeHub && activeQuiz && isQuizStarted && !finalAttempt;
-
-    if (isAtInstructions && !streamRef.current) {
-      const requestCamera = async () => {
-        try {
-          setCameraStatus('Requesting...');
-          const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
-          setAndRefStream(mediaStream);
-          setCameraStatus('Active');
-        } catch (err: any) {
-          console.warn('Camera access error:', err);
-          if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-            setCameraStatus('No Hardware');
-          } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-            setCameraStatus('Permission Denied');
-          } else {
-            setCameraStatus('Permission Denied');
-          }
-        }
-      };
-      requestCamera();
-    }
-
-    // Stop streams if we cancel or leave the instructions/taking views
-    if (!isAtInstructions && !isTaking && streamRef.current) {
-      try {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      } catch (e) {
-        console.error('Error stopping tracks:', e);
-      }
-      setAndRefStream(null);
-    }
-  }, [activeHub, activeQuiz, isQuizStarted, finalAttempt]);
-
-  useEffect(() => {
-    return () => {
-      if (streamRef.current) {
-        try {
-          streamRef.current.getTracks().forEach((track) => track.stop());
-        } catch (e) {
-          console.error('Error stopping tracks on unmount:', e);
-        }
-      }
-    };
-  }, []);
-
-  // 4.1 AI Vision Proctoring Detection Loop (Warning-Only)
-  useEffect(() => {
-    if (!isQuizStarted || !activeAttemptId) return;
-
-    let isCancelled = false;
-    let intervalId: NodeJS.Timeout | null = null;
-    let cocoModel: any = null;
-    let faceModel: any = null;
-
-    const loadModelsAndStartLoop = async () => {
-      try {
-        console.log('Initializing AI Vision Proctoring models...');
-        await tf.ready();
-        const [loadedCoco, loadedFace] = await Promise.all([
-          cocoSsd.load(),
-          blazeface.load()
-        ]);
-
-        if (isCancelled) return;
-        cocoModel = loadedCoco;
-        faceModel = loadedFace;
-        console.log('AI models loaded successfully!');
-
-        intervalId = setInterval(async () => {
-          if (isCancelled || !videoRef.current || videoRef.current.readyState < 2) return;
-
-          try {
-            const videoEl = videoRef.current;
-
-            // 1. Detect cell phones (coco-ssd)
-            const predictions = await cocoModel.detect(videoEl);
-            const hasPhone = predictions.some((pred: any) => pred.class === 'cell phone');
-
-            if (hasPhone) {
-              console.log('AI Detected: Cell Phone');
-              await updateDoc(doc(db, 'attempts', activeAttemptId), {
-                cheatFlags: arrayUnion('AI Flag: Cell Phone Detected')
-              });
-              setAiWarning('Warning: Suspicious activity detected by camera.');
-            }
-
-            // 2. Detect multiple faces (blazeface)
-            const faces = await faceModel.estimateFaces(videoEl, false);
-            if (faces.length > 1) {
-              console.log('AI Detected: Multiple People');
-              await updateDoc(doc(db, 'attempts', activeAttemptId), {
-                cheatFlags: arrayUnion('AI Flag: Multiple People Detected')
-              });
-              setAiWarning('Warning: Suspicious activity detected by camera.');
-            }
-          } catch (err) {
-            console.error('AI Frame detection evaluation error:', err);
-          }
-        }, 3000);
-      } catch (err) {
-        console.error('Failed to load TFJS proctoring models:', err);
-      }
-    };
-
-    loadModelsAndStartLoop();
-
-    return () => {
-      isCancelled = true;
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
-    };
-  }, [isQuizStarted, activeAttemptId]);
-
-  // Toast Auto-Dismiss
-  useEffect(() => {
-    if (aiWarning) {
-      const timer = setTimeout(() => {
-        setAiWarning(null);
-      }, 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [aiWarning]);
-
-  // 4. Timer effect & Scheduled window breach check
-  useEffect(() => {
-    if (!isQuizStarted || timeLeft <= 0) return;
-
-    timerRef.current = setInterval(() => {
-      // Monitor if closeAt / endTime is breached in real-time
-      if (activeQuiz) {
-        const { end } = getQuizSchedule(activeQuiz);
-        if (end) {
-          const endTime = new Date(end).getTime();
-          if (Date.now() >= endTime) {
-            clearInterval(timerRef.current!);
-            setIsQuestionMutationsLocked(true);
-            setWarningModalMessage('CRITICAL SCHEDULE WINDOW BREACH: The quiz closed time has been reached. Lock down initiated. Your answers are being auto-submitted.');
-            setWarningModalOpen(true);
-            handleSubmitQuiz('Timer Expired');
-            return;
-          }
-        }
-      }
-
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timerRef.current!);
-          // Auto submit on time-out
-          handleSubmitQuiz('Timer Expired');
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isQuizStarted, timeLeft, activeQuiz]);
-
-  // 4.5 Listen for Admin Remote Override (forceLocked)
-  useEffect(() => {
-    if (!activeAttemptId || !isQuizStarted) return;
-
-    const unsubscribe = onSnapshot(doc(db, 'attempts', activeAttemptId), (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        if (data && data.forceLocked === true) {
-          setIsQuestionMutationsLocked(true);
-          setWarningModalMessage('SESSION OVERRIDE: This quiz session has been manually terminated by an administrator.');
-          setWarningModalOpen(true);
-          
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          
-          submitQuiz('Manually Terminated by Administrator');
-        }
-      }
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [activeAttemptId, isQuizStarted]);
-
-  // 5. Proctoring Logger Callbacks
-  const logCheatFlag = async (flag: string) => {
-    if (isSubmittingRef.current) return;
-    cheatFlagsRef.current.push(flag);
-    if (!activeAttemptId) return;
-    const path = `attempts/${activeAttemptId}`;
-    try {
-      await updateDoc(doc(db, 'attempts', activeAttemptId), {
-        cheatFlags: arrayUnion(flag),
-        updatedAt: serverTimestamp()
-      });
-    } catch (err) {
-      console.error('Failed to log proctoring alert to Firestore:', err);
-    }
-  };
-
-  const handleProctoringAutoSubmit = async (reason: string) => {
-    if (isSubmittingRef.current) return;
-    setIsQuestionMutationsLocked(true);
-    setWarningModalMessage(`PROCTORING LOCKOUT: ${reason}. Your quiz has been auto-submitted due to a security violation.`);
-    setWarningModalOpen(true);
-    await handleSubmitQuiz('Locked Out', true);
-  };
-
-  // Mount strict proctoring hook
-  useProctoring({
-    active: isQuizStarted,
-    onCheatFlag: logCheatFlag,
-    onAutoSubmit: handleProctoringAutoSubmit,
-    onShowWarningModal: (msg) => {
-      if (isSubmittingRef.current) return;
-      setWarningModalMessage(msg);
-      setWarningModalOpen(true);
-    },
-    isSubmittingRef: isSubmittingRef
-  });
-
-  // Dismiss Warning Modal
-  const handleDismissWarning = () => {
-    setWarningModalOpen(false);
-  };
-
-  // 6. Submit Quiz Handler
-  const handleSubmitQuiz = async (reason: 'Submitted' | 'Timer Expired' | 'Locked Out', forceLockout = false) => {
+  // 3.5 Submit Quiz Handler (Stable Callback)
+  const handleSubmitQuiz = useCallback(async (reason: 'Submitted' | 'Timer Expired' | 'Locked Out', forceLockout = false) => {
     if (isSubmittingRef.current) return;
     isSubmittingRef.current = true;
 
@@ -657,6 +531,9 @@ export const QuizHub: React.FC = () => {
         updatedAt: serverTimestamp()
       });
 
+      localStorage.removeItem('arena_active_session');
+      localStorage.removeItem('arena_saved_answers');
+
       setFinalAttempt(finalAttemptData);
       setIsQuizStarted(false);
       setActiveAttemptId(null);
@@ -677,7 +554,249 @@ export const QuizHub: React.FC = () => {
       isSubmittingRef.current = false;
       setLoading(false);
     }
+  }, [activeAttemptId, activeQuiz, quizQuestions, answers, timeLeft, activeHub, user, profile, ipAddress, deviceInfo, exactStartTime]);
+
+  // Camera & stream lifecycle hooks
+  useEffect(() => {
+    const isAtInstructions = activeHub && activeQuiz && !isQuizStarted && !finalAttempt;
+    const isTaking = activeHub && activeQuiz && isQuizStarted && !finalAttempt;
+
+    if (isAtInstructions && !streamRef.current) {
+      const requestCamera = async () => {
+        try {
+          setCameraStatus('Requesting...');
+          const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          setAndRefStream(mediaStream);
+          setCameraStatus('Active');
+        } catch (err: any) {
+          console.warn('Camera access error:', err);
+          if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+            setCameraStatus('No Hardware');
+          } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            setCameraStatus('Permission Denied');
+          } else {
+            setCameraStatus('Permission Denied');
+          }
+        }
+      };
+      requestCamera();
+    }
+
+    // Stop streams if we cancel or leave the instructions/taking views
+    if (!isAtInstructions && !isTaking && streamRef.current) {
+      try {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      } catch (e) {
+        console.error('Error stopping tracks:', e);
+      }
+      setAndRefStream(null);
+    }
+  }, [activeHub, activeQuiz, isQuizStarted, finalAttempt]);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        try {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+        } catch (e) {
+          console.error('Error stopping tracks on unmount:', e);
+        }
+      }
+    };
+  }, []);
+
+  // 4.1 AI Vision Proctoring Detection Loop (Warning-Only)
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId) return;
+
+    let isCancelled = false;
+    let cocoModel: any = null;
+    let faceModel: any = null;
+
+    const loadModelsAndStartLoop = async () => {
+      try {
+        console.log('Initializing AI Vision Proctoring models...');
+        await tf.ready();
+        const [loadedCoco, loadedFace] = await Promise.all([
+          cocoSsd.load(),
+          blazeface.load()
+        ]);
+
+        if (isCancelled) return;
+        cocoModel = loadedCoco;
+        faceModel = loadedFace;
+        console.log('AI models loaded successfully!');
+
+        const interval = setInterval(async () => {
+          if (isCancelled || !videoRef.current || videoRef.current.readyState < 2) return;
+
+          try {
+            const videoEl = videoRef.current;
+
+            // 1. Detect cell phones (coco-ssd)
+            const predictions = await cocoModel.detect(videoEl);
+            const hasPhone = predictions.some((pred: any) => pred.class === 'cell phone');
+
+            if (hasPhone) {
+              console.log('AI Detected: Cell Phone');
+              await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                cheatFlags: arrayUnion('AI Flag: Cell Phone Detected')
+              });
+              setAiWarning('Warning: Suspicious activity detected by camera.');
+            }
+
+            // 2. Detect multiple faces (blazeface)
+            const faces = await faceModel.estimateFaces(videoEl, false);
+            if (faces.length > 1) {
+              console.log('AI Detected: Multiple People');
+              await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                cheatFlags: arrayUnion('AI Flag: Multiple People Detected')
+              });
+              setAiWarning('Warning: Suspicious activity detected by camera.');
+            }
+          } catch (err) {
+            console.error('AI Frame detection evaluation error:', err);
+          }
+        }, 3000);
+
+        aiIntervalRef.current = interval;
+        if (isCancelled) {
+          clearInterval(interval);
+          aiIntervalRef.current = null;
+        }
+      } catch (err) {
+        console.error('Failed to load TFJS proctoring models:', err);
+      }
+    };
+
+    loadModelsAndStartLoop();
+
+    return () => {
+      isCancelled = true;
+      if (aiIntervalRef.current) {
+        clearInterval(aiIntervalRef.current);
+        aiIntervalRef.current = null;
+      }
+    };
+  }, [isQuizStarted, activeAttemptId]);
+
+  // Toast Auto-Dismiss
+  useEffect(() => {
+    if (aiWarning) {
+      const timer = setTimeout(() => {
+        setAiWarning(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [aiWarning]);
+
+  // 4. Timer effect & Scheduled window breach check
+  useEffect(() => {
+    if (!isQuizStarted || !exactStartTime || !activeQuiz) return;
+
+    timerRef.current = setInterval(() => {
+      // Strict Expiration Enforcement
+      const closeTime = activeQuiz.closeAt || (activeQuiz as any).endTime;
+      if (closeTime) {
+        const deadlineMs = new Date(closeTime).getTime();
+        if (Date.now() >= deadlineMs) {
+          if (timerRef.current) clearInterval(timerRef.current);
+          setWarningModalMessage('SESSION EXPIRED: The official closing time for this exam has been reached.');
+          setWarningModalOpen(true);
+          handleSubmitQuiz('Timer Expired', true);
+          return;
+        }
+      }
+
+      // Absolute Time Calculation
+      const startMs = new Date(exactStartTime).getTime();
+      const elapsedSeconds = Math.floor((Date.now() - startMs) / 1000);
+      const totalAllowedSeconds = activeQuiz.timeLimit * 60;
+      const remaining = Math.max(0, totalAllowedSeconds - elapsedSeconds);
+      setTimeLeft(remaining);
+
+      // Standard Timeout
+      if (remaining <= 0) {
+        if (timerRef.current) clearInterval(timerRef.current);
+        handleSubmitQuiz('Timer Expired', true);
+      }
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isQuizStarted, exactStartTime, activeQuiz, handleSubmitQuiz]);
+
+  // 4.5 Listen for Admin Remote Override (forceLocked)
+  useEffect(() => {
+    if (!activeAttemptId || !isQuizStarted) return;
+
+    const unsubscribe = onSnapshot(doc(db, 'attempts', activeAttemptId), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        if (data && data.forceLocked === true) {
+          setIsQuestionMutationsLocked(true);
+          setWarningModalMessage('SESSION OVERRIDE: This quiz session has been manually terminated by an administrator.');
+          setWarningModalOpen(true);
+          
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+          
+          submitQuiz('Manually Terminated by Administrator');
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [activeAttemptId, isQuizStarted]);
+
+  // 5. Proctoring Logger Callbacks
+  const logCheatFlag = async (flag: string) => {
+    if (isSubmittingRef.current) return;
+    cheatFlagsRef.current.push(flag);
+    if (!activeAttemptId) return;
+    const path = `attempts/${activeAttemptId}`;
+    try {
+      await updateDoc(doc(db, 'attempts', activeAttemptId), {
+        cheatFlags: arrayUnion(flag),
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      console.error('Failed to log proctoring alert to Firestore:', err);
+    }
   };
+
+  const handleProctoringAutoSubmit = async (reason: string) => {
+    if (isSubmittingRef.current) return;
+    setIsQuestionMutationsLocked(true);
+    setWarningModalMessage(`PROCTORING LOCKOUT: ${reason}. Your quiz has been auto-submitted due to a security violation.`);
+    setWarningModalOpen(true);
+    await handleSubmitQuiz('Locked Out', true);
+  };
+
+  // Mount strict proctoring hook
+  useProctoring({
+    active: isQuizStarted,
+    onCheatFlag: logCheatFlag,
+    onAutoSubmit: handleProctoringAutoSubmit,
+    onShowWarningModal: (msg) => {
+      if (isSubmittingRef.current) return;
+      setWarningModalMessage(msg);
+      setWarningModalOpen(true);
+    },
+    isSubmittingRef: isSubmittingRef
+  });
+
+  // Dismiss Warning Modal
+  const handleDismissWarning = () => {
+    setWarningModalOpen(false);
+  };
+
+  // 6. Submit Quiz Handler (moved above);
 
   const submitQuiz = useCallback(async (isAutoSubmit = false, reason = '') => {
     if (isSubmittingRef.current) return;
@@ -1046,10 +1165,11 @@ export const QuizHub: React.FC = () => {
                     key={idx}
                     onClick={() => {
                       if (isQuestionMutationsLocked) return;
-                      setAnswers((prev) => ({
-                        ...prev,
-                        [qId]: idx
-                      }));
+                      setAnswers((prev) => {
+                        const updated = { ...prev, [qId]: idx };
+                        localStorage.setItem('arena_saved_answers', JSON.stringify(updated));
+                        return updated;
+                      });
                     }}
                     className={`border-2 rounded-xl p-4 cursor-pointer transition-all flex items-center justify-between ${
                       isSelected
@@ -1089,7 +1209,7 @@ export const QuizHub: React.FC = () => {
           <div className="flex justify-between items-center gap-4">
             <button
               onClick={() => setCurrentQuestionIdx((p) => Math.max(0, p - 1))}
-              disabled={currentQuestionIdx === 0}
+              disabled={currentQuestionIdx === 0 || isSubmittingRef.current || isQuestionMutationsLocked}
               className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg disabled:opacity-30 cursor-pointer transition-all"
             >
               Previous
@@ -1098,7 +1218,8 @@ export const QuizHub: React.FC = () => {
             {currentQuestionIdx + 1 < quizQuestions.length && !hasSelectedOption && (
               <button
                 onClick={handleSkip}
-                className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-muted hover:text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg cursor-pointer transition-all"
+                disabled={isSubmittingRef.current || isQuestionMutationsLocked}
+                className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-muted hover:text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg disabled:opacity-30 cursor-pointer transition-all"
               >
                 Skip for Now
               </button>
@@ -1107,7 +1228,8 @@ export const QuizHub: React.FC = () => {
             {currentQuestionIdx < quizQuestions.length - 1 ? (
               <button
                 onClick={() => setCurrentQuestionIdx((p) => p + 1)}
-                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 cursor-pointer transition-all"
+                disabled={isSubmittingRef.current || isQuestionMutationsLocked}
+                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 disabled:opacity-30 cursor-pointer transition-all"
                 style={{ backgroundColor: isColorblind ? '#1d4ed8' : 'var(--primary)' }}
               >
                 Next Question
@@ -1115,7 +1237,8 @@ export const QuizHub: React.FC = () => {
             ) : firstUnansweredIndex !== -1 ? (
               <button
                 onClick={() => setCurrentQuestionIdx(firstUnansweredIndex)}
-                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 cursor-pointer transition-all"
+                disabled={isSubmittingRef.current || isQuestionMutationsLocked}
+                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 disabled:opacity-30 cursor-pointer transition-all"
                 style={{ backgroundColor: isColorblind ? '#1d4ed8' : 'var(--primary)' }}
               >
                 Review Skipped Questions
@@ -1127,8 +1250,8 @@ export const QuizHub: React.FC = () => {
                     handleSubmitQuiz('Submitted');
                   }
                 }}
-                disabled={loading}
-                className="px-8 py-2.5 rounded-lg text-white font-extrabold text-sm hover:bg-opacity-95 shadow-xs cursor-pointer transition-all"
+                disabled={loading || isSubmittingRef.current || isQuestionMutationsLocked}
+                className="px-8 py-2.5 rounded-lg text-white font-extrabold text-sm hover:bg-opacity-95 shadow-xs disabled:opacity-30 cursor-pointer transition-all"
                 style={{ backgroundColor: isColorblind ? '#ea580c' : 'var(--accent)' }}
                 id="submit-quiz-btn"
               >
