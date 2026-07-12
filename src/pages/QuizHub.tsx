@@ -561,7 +561,8 @@ export const QuizHub: React.FC = () => {
     const isAtInstructions = activeHub && activeQuiz && !isQuizStarted && !finalAttempt;
     const isTaking = activeHub && activeQuiz && isQuizStarted && !finalAttempt;
 
-    if (isAtInstructions && !streamRef.current) {
+    // FIX: Request camera if at instructions OR if taking the quiz (e.g., after a page refresh)
+    if ((isAtInstructions || isTaking) && !streamRef.current) {
       const requestCamera = async () => {
         try {
           setCameraStatus('Requesting...');
