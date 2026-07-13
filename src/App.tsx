@@ -1,6 +1,7 @@
 import React from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar } from './components/Navbar';
+import { Footer } from './components/Footer';
 import { AuthPage } from './pages/AuthPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { OrganizerDashboard } from './pages/OrganizerDashboard';
@@ -33,6 +34,7 @@ const AppContent: React.FC = () => {
         <main className="flex-1">
           <AuthPage />
         </main>
+        {!isQuizStarted && <Footer />}
       </div>
     );
   }
@@ -47,6 +49,7 @@ const AppContent: React.FC = () => {
         <main className="flex-1">
           <OnboardingPage />
         </main>
+        {!isQuizStarted && <Footer />}
       </div>
     );
   }
@@ -62,6 +65,7 @@ const AppContent: React.FC = () => {
           <QuizHub />
         )}
       </main>
+      {!isQuizStarted && <Footer />}
     </div>
   );
 };
