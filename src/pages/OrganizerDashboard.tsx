@@ -2587,6 +2587,19 @@ export const OrganizerDashboard: React.FC = () => {
             </table>
           </div>
 
+          <div className="mt-6 mb-6">
+            <h3 className="font-bold text-md mb-2 border-b border-gray-300 pb-1">PROCTORING INCIDENT LOG</h3>
+            {auditAttempt.cheatFlags && auditAttempt.cheatFlags.length > 0 ? (
+              <ul className="list-disc ml-5 text-sm text-red-700 font-semibold space-y-1">
+                {auditAttempt.cheatFlags.map((flag, idx) => (
+                  <li key={idx}>{flag}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-green-700 font-bold">✔️ Secure Environment - No Violations Detected</p>
+            )}
+          </div>
+
           {/* Q&A Breakdown Section */}
           <div>
             <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #d1d5db', paddingBottom: '8px' }}>Question & Answer Breakdown</h3>

@@ -175,6 +175,7 @@ export const QuizHub: React.FC = () => {
   const [warningModalOpen, setWarningModalOpen] = useState(false);
   const [warningModalMessage, setWarningModalMessage] = useState('');
   const [isQuestionMutationsLocked, setIsQuestionMutationsLocked] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState<string>('Listening for audio...');
 
   // Result States
   const [finalAttempt, setFinalAttempt] = useState<Attempt | null>(null);
@@ -630,7 +631,7 @@ export const QuizHub: React.FC = () => {
       const requestCamera = async () => {
         try {
           setCameraStatus('Requesting...');
-          const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
           setAndRefStream(mediaStream);
           setCameraStatus('Active');
         } catch (err: any) {
@@ -851,6 +852,7 @@ export const QuizHub: React.FC = () => {
     // Advanced contextual speech evaluation
     recognition.onresult = async (event: any) => {
       const currentTranscript = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
+      setLiveTranscript(currentTranscript);
       console.log("AI Acoustic Intercept:", currentTranscript);
 
       const now = Date.now();
@@ -1289,6 +1291,7 @@ export const QuizHub: React.FC = () => {
                   <li><strong>Tab Change Lockdown:</strong> Do NOT navigate away. Switching tabs is instantly logged to Firestore as an infraction.</li>
                   <li><strong>Layout Device Lockdown:</strong> Clipboard Copy/Paste shortcuts and Right-click context menus are completely disabled.</li>
                   <li><strong>Verified Identity:</strong> Your exam results will be digitally logged and verified against CNIC {profile?.cnic}.</li>
+                  <li><strong>Acoustic Monitoring:</strong> Your microphone is active. Any talking, whispering, or contextual speech will be transcribed, recorded, and permanently flagged in your forensic audit.</li>
                 </ul>
               </div>
 
@@ -1630,6 +1633,13 @@ export const QuizHub: React.FC = () => {
               </button>
             )}
           </motion.div>
+        </div>
+      )}
+
+      {isQuizStarted && (
+        <div className="fixed bottom-4 left-4 z-50 bg-black/80 border border-brand-primary text-brand-primary p-3 rounded-xl max-w-sm shadow-2xl font-mono text-xs">
+          <div className="font-bold mb-1 uppercase tracking-widest text-[10px] text-white">AI Acoustic Intercept (Debug)</div>
+          {liveTranscript}
         </div>
       )}
 
