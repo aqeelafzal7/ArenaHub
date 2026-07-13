@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
 import { 
   collection, 
   doc, 
@@ -76,6 +83,17 @@ function shuffleArray<T>(array: T[]): T[] {
 
 const GAS_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzYw0GXrK2VPraB_fh3lT0gJr2EXF53I9HMKP0rkWN-rG_NTYfdXIzUfP-nwT9ftHoE/exec';
 
+const SUSPICIOUS_KEYWORDS = [
+  // English
+  'answer', 'question', 'search', 'google', 'chat gpt', 'tell me', 'what is', 'option',
+  // Roman Urdu / Hindi
+  'jawab', 'batao', 'madad', 'kya hai', 'sawal', 'dhundo', 'bhai', 'yaar',
+  // Roman Punjabi
+  'dasso', 'ki ae', 'kivein', 'bol',
+  // Urdu Script (In case the OS natively translates it)
+  'جواب', 'سوال', 'بتاؤ', 'مدد', 'کیا'
+];
+
 export const QuizHub: React.FC = () => {
   const { user, profile, theme, isQuizStarted, setIsQuizStarted } = useAuth();
   const isColorblind = theme === 'colorblind';
@@ -149,6 +167,9 @@ export const QuizHub: React.FC = () => {
   const cheatFlagsRef = useRef<string[]>([]);
   const lastUploadTimeRef = useRef<number>(0);
   const compulsoryShotsTakenRef = useRef(0);
+  const recognitionRef = useRef<any>(null);
+  const isListeningRef = useRef(false);
+  const speechThrottleRef = useRef<number>(0);
 
   // Proctoring Alert Modal States
   const [warningModalOpen, setWarningModalOpen] = useState(false);
@@ -800,6 +821,93 @@ export const QuizHub: React.FC = () => {
     
     return () => clearInterval(snapshotInterval);
   }, [isQuizStarted, activeAttemptId, activeQuiz]);
+
+  // Advanced AI Speech Proctoring Engine
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId) return;
+
+    // Cross-browser support (Chrome, Safari, Edge, Android, iOS)
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn('Advanced AI Speech Proctoring not supported on this specific browser version.');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true; // Keep listening after they stop speaking
+    recognition.interimResults = false; // Only process final sentences
+    // Optimize for regional accents (Pakistani English/Urdu mix)
+    recognition.lang = 'en-PK';
+
+    recognitionRef.current = recognition;
+
+    // Auto-restart if it stops due to silence
+    recognition.onend = () => {
+      if (isQuizStarted && isListeningRef.current) {
+        try { recognition.start(); } catch (e) {}
+      }
+    };
+
+    // Advanced contextual speech evaluation
+    recognition.onresult = async (event: any) => {
+      const currentTranscript = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
+      console.log("AI Acoustic Intercept:", currentTranscript);
+
+      const now = Date.now();
+      if (now - speechThrottleRef.current < 30000) return; // 30-second throttle
+
+      let flagReason = '';
+      const wordCount = currentTranscript.split(/\s+/).length;
+
+      // Tier 1: Check against Multi-Lingual Blacklist
+      const foundKeyword = SUSPICIOUS_KEYWORDS.find(word => currentTranscript.includes(word));
+      if (foundKeyword) {
+        flagReason = `Suspicious Keyword Spoken (${foundKeyword})`;
+      } 
+      // Tier 2: Dynamic Question Context Check
+      else if (quizQuestions[currentQuestionIdx]) {
+        const questionWords = quizQuestions[currentQuestionIdx].text.toLowerCase().split(' ').filter((w: string) => w.length > 4);
+        const matchedContext = questionWords.find((word: string) => currentTranscript.includes(word));
+        if (matchedContext) flagReason = `Spoke Exam Question Text (${matchedContext})`;
+      }
+      // Tier 3: The "Babble" Check (Catching unknown dialects by length)
+      if (!flagReason && wordCount >= 5) {
+        flagReason = `Sustained Conversational Talking Detected`;
+      }
+
+      // If any tier is triggered, log it and snap a photo
+      if (flagReason) {
+        speechThrottleRef.current = now;
+
+        const driveUrl = await captureAndUploadSnapshot('Audio_Violation');
+        const logMsg = `AI Flag: ${flagReason}. Transcript: "${currentTranscript}" ${driveUrl ? `[Proof Link: ${driveUrl}]` : ''}`;
+
+        if (activeAttemptId) {
+          await updateDoc(doc(db, 'attempts', activeAttemptId), {
+            cheatFlags: arrayUnion(logMsg),
+            updatedAt: serverTimestamp()
+          });
+        }
+      }
+    };
+
+    // Start speech recognition proctoring
+    isListeningRef.current = true;
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error('Speech recognition start failed:', err);
+    }
+
+    return () => {
+      isListeningRef.current = false;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {}
+      }
+    };
+  }, [isQuizStarted, activeAttemptId, quizQuestions, currentQuestionIdx]);
 
   // 4. Timer effect & Scheduled window breach check
   useEffect(() => {
