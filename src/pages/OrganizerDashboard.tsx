@@ -85,7 +85,8 @@ export const OrganizerDashboard: React.FC = () => {
 
   // Quiz Constraints & Scheduling States
   const [totalAttemptsAllowed, setTotalAttemptsAllowed] = useState<number>(1);
-  const [allowedCnicsInput, setAllowedCnicsInput] = useState<string>('');
+  const [allowedCnics, setAllowedCnics] = useState<string[]>([]);
+  const [cnicInputValue, setCnicInputValue] = useState('');
   const [openAt, setOpenAt] = useState<string>('');
   const [closeAt, setCloseAt] = useState<string>('');
   const [postSubmissionText, setPostSubmissionText] = useState('');
@@ -595,7 +596,7 @@ export const OrganizerDashboard: React.FC = () => {
   useEffect(() => {
     if (selectedQuiz) {
       setTotalAttemptsAllowed(selectedQuiz.totalAttemptsAllowed ?? 1);
-      setAllowedCnicsInput(selectedQuiz.allowedCnics ? selectedQuiz.allowedCnics.join(', ') : '');
+      setAllowedCnics(selectedQuiz.allowedCnics || []);
       setOpenAt(formatIsoForDatetimeLocal(selectedQuiz.openAt));
       setCloseAt(formatIsoForDatetimeLocal(selectedQuiz.closeAt));
       setPostSubmissionText(selectedQuiz.postSubmissionText ?? '');
@@ -738,20 +739,47 @@ export const OrganizerDashboard: React.FC = () => {
     }
   };
 
+  const handleCnicInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    // Auto-format to XXXXX-XXXXXXX-X just like onboarding
+    const digits = val.replace(/\D/g, '').substring(0, 13);
+    let formatted = '';
+    if (digits.length > 0) formatted += digits.substring(0, 5);
+    if (digits.length > 5) formatted += '-' + digits.substring(5, 12);
+    if (digits.length > 12) formatted += '-' + digits.substring(12, 13);
+    setCnicInputValue(formatted);
+  };
+
+  const handleCnicKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault(); // Stop the form from submitting!
+      
+      const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+      if (cnicRegex.test(cnicInputValue) && !allowedCnics.includes(cnicInputValue)) {
+        setAllowedCnics([...allowedCnics, cnicInputValue]);
+        setCnicInputValue('');
+      }
+    } else if (e.key === 'Backspace' && cnicInputValue === '' && allowedCnics.length > 0) {
+      // Delete the last tag if input is empty and user presses backspace
+      const newCnics = [...allowedCnics];
+      newCnics.pop();
+      setAllowedCnics(newCnics);
+    }
+  };
+
+  const removeCnicTag = (tagToRemove: string) => {
+    setAllowedCnics(allowedCnics.filter(cnic => cnic !== tagToRemove));
+  };
+
   const handleSaveConstraints = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedQuiz) return;
     setQuizLoading(true);
     setError(null);
 
-    const parsedCnics = allowedCnicsInput
-      .split(',')
-      .map(s => s.trim())
-      .filter(s => s.length > 0);
-
     const updatedFields: Partial<Quiz> = {
       totalAttemptsAllowed: Number(totalAttemptsAllowed),
-      allowedCnics: parsedCnics,
+      allowedCnics: allowedCnics,
       openAt: openAt ? new Date(openAt).toISOString() : '',
       closeAt: closeAt ? new Date(closeAt).toISOString() : '',
       postSubmissionText: postSubmissionText.trim()
@@ -1532,14 +1560,43 @@ export const OrganizerDashboard: React.FC = () => {
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-brand-text mb-1">Allowed CNICs (White-list)</label>
-                          <textarea
-                            value={allowedCnicsInput}
-                            onChange={(e) => setAllowedCnicsInput(e.target.value)}
-                            placeholder="E.g., 42101-1234567-3, 42101-9876543-1"
-                            className="w-full bg-brand-bg border border-brand-border rounded-lg p-2 text-brand-text text-xs focus:ring-1 focus:ring-brand-primary/30 outline-none h-[42px] resize-none"
-                          />
-                          <p className="text-[9px] text-brand-muted mt-0.5">Comma-separated CNIC string list. Leave empty to allow any registrant.</p>
+                          <label className="block text-xs font-bold text-brand-text mb-1">
+                            Allowed CNICs (White-list)
+                          </label>
+
+                          {/* Tag Container */}
+                          <div className="flex flex-wrap items-center gap-2 w-full bg-brand-bg border border-brand-border rounded-lg p-2 focus-within:ring-1 focus-within:ring-brand-primary/30 transition-all min-h-[42px]">
+
+                            {/* Map existing CNIC tags */}
+                            {allowedCnics.map((cnic, index) => (
+                              <span 
+                                key={index} 
+                                className="flex items-center gap-1 px-1.5 py-0.5 bg-brand-primary/10 text-brand-primary border border-brand-primary/20 rounded text-[10px] font-mono tracking-wide"
+                              >
+                                {cnic}
+                                <button
+                                  type="button"
+                                  onClick={() => removeCnicTag(cnic)}
+                                  className="hover:bg-brand-primary/20 p-0.5 rounded-full transition-colors"
+                                >
+                                  <X className="h-2.5 w-2.5"/>
+                                </button>
+                              </span>
+                            ))}
+
+                            {/* The actual input field */}
+                            <input
+                              type="text"
+                              value={cnicInputValue}
+                              onChange={handleCnicInputChange}
+                              onKeyDown={handleCnicKeyDown}
+                              placeholder={allowedCnics.length === 0 ? "E.g., 35201-1234567-9 (Press Enter)" : "Type CNIC & Press Enter..."}
+                              className="flex-1 min-w-[150px] bg-transparent outline-none text-brand-text placeholder-brand-muted text-xs font-mono tracking-wide"
+                            />
+                          </div>
+                          <p className="text-[9px] text-brand-muted mt-1 font-medium">
+                            Press <kbd className="bg-brand-border/50 px-1 py-0.5 rounded text-brand-text font-bold">Enter</kbd> to add a CNIC. Leave empty to allow any registrant.
+                          </p>
                         </div>
                       </div>
 
