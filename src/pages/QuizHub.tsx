@@ -830,13 +830,14 @@ export const QuizHub: React.FC = () => {
     // Cross-browser support (Chrome, Safari, Edge, Android, iOS)
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      console.warn('Advanced AI Speech Proctoring not supported on this specific browser version.');
+      setLiveTranscript("[ERROR] AI Speech not supported on this browser.");
       return;
     }
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true; // Keep listening after they stop speaking
-    recognition.interimResults = false; // Only process final sentences
+    // false means it waits for you to finish your sentence before evaluating
+    recognition.interimResults = false; 
     // Optimize for regional accents (Pakistani English/Urdu mix)
     recognition.lang = 'en-PK';
 
@@ -893,12 +894,13 @@ export const QuizHub: React.FC = () => {
       }
     };
 
-    // Start speech recognition proctoring
+    // BUG FIX: Automatically start the engine the moment it is created!
     isListeningRef.current = true;
     try {
       recognition.start();
+      console.log("AI Speech Engine Started Successfully");
     } catch (err) {
-      console.error('Speech recognition start failed:', err);
+      console.error("Failed to start speech engine:", err);
     }
 
     return () => {
