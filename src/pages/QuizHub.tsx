@@ -175,7 +175,6 @@ export const QuizHub: React.FC = () => {
   const [warningModalOpen, setWarningModalOpen] = useState(false);
   const [warningModalMessage, setWarningModalMessage] = useState('');
   const [isQuestionMutationsLocked, setIsQuestionMutationsLocked] = useState(false);
-  const [liveTranscript, setLiveTranscript] = useState<string>('Listening for audio...');
 
   // Result States
   const [finalAttempt, setFinalAttempt] = useState<Attempt | null>(null);
@@ -830,7 +829,7 @@ export const QuizHub: React.FC = () => {
     // Cross-browser support (Chrome, Safari, Edge, Android, iOS)
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setLiveTranscript("[ERROR] AI Speech not supported on this browser.");
+      console.warn("[ERROR] AI Speech not supported on this browser.");
       return;
     }
 
@@ -853,7 +852,6 @@ export const QuizHub: React.FC = () => {
     // Advanced contextual speech evaluation
     recognition.onresult = async (event: any) => {
       const currentTranscript = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
-      setLiveTranscript(currentTranscript);
       console.log("AI Acoustic Intercept:", currentTranscript);
 
       const now = Date.now();
@@ -1639,9 +1637,15 @@ export const QuizHub: React.FC = () => {
       )}
 
       {isQuizStarted && (
-        <div className="fixed bottom-4 left-4 z-50 bg-black/80 border border-brand-primary text-brand-primary p-3 rounded-xl max-w-sm shadow-2xl font-mono text-xs">
-          <div className="font-bold mb-1 uppercase tracking-widest text-[10px] text-white">AI Acoustic Intercept (Debug)</div>
-          {liveTranscript}
+        <div className="fixed bottom-6 left-6 z-50 bg-slate-900/90 border border-red-500/30 backdrop-blur-md px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-3">
+          <div className="relative flex h-3 w-3">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-red-600"></span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[9px] font-black tracking-widest text-red-500 uppercase">Acoustic AI</span>
+            <span className="text-[11px] font-bold text-slate-300">Monitoring Active</span>
+          </div>
         </div>
       )}
 

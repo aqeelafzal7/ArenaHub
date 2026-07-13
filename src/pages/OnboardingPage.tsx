@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Users, ClipboardSignature, UserCheck, CreditCard, User } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -12,6 +12,12 @@ export const OnboardingPage: React.FC = () => {
   const [cnic, setCnic] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user?.displayName) {
+      setName(user.displayName);
+    }
+  }, [user?.displayName]);
 
   // Auto-format CNIC input to XXXXX-XXXXXXX-X
   const handleCnicChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -81,7 +87,7 @@ export const OnboardingPage: React.FC = () => {
         </div>
 
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg text-red-800 text-sm font-medium">
+          <div className="mb-6 p-4 bg-red-500/10 border-l-4 border-red-500 rounded-r-lg text-red-600 dark:text-red-400 text-sm font-bold">
             {error}
           </div>
         )}
@@ -103,10 +109,11 @@ export const OnboardingPage: React.FC = () => {
               <input
                 type="text"
                 required
+                disabled={loading}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="E.g., Muhammad Ali"
-                className="w-full bg-brand-bg border border-brand-border rounded-lg pl-10 pr-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none transition-all text-sm font-medium"
+                placeholder="E.g., Muhammad Aqeel Afzal"
+                className="w-full bg-brand-bg border border-brand-border rounded-lg pl-10 pr-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none transition-all text-sm font-medium disabled:opacity-50"
                 id="onboard-name-input"
               />
             </div>
@@ -120,9 +127,11 @@ export const OnboardingPage: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               
               {/* Organizer Choice */}
-              <div
+              <button
+                type="button"
+                disabled={loading}
                 onClick={() => setRole('Organizer')}
-                className={`border-2 rounded-xl p-5 cursor-pointer transition-all flex flex-col items-center text-center gap-2 ${
+                className={`border-2 rounded-xl p-5 cursor-pointer transition-all flex flex-col items-center text-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
                   role === 'Organizer'
                     ? 'border-brand-primary bg-brand-primary/5 shadow-xs'
                     : 'border-brand-border hover:border-brand-primary/50 hover:bg-brand-bg'
@@ -134,12 +143,14 @@ export const OnboardingPage: React.FC = () => {
                 <span className="text-xs text-brand-muted">
                   Create hubs, customize branding logos, publish quizzes, and watch live proctoring.
                 </span>
-              </div>
+              </button>
 
               {/* Participant Choice */}
-              <div
+              <button
+                type="button"
+                disabled={loading}
                 onClick={() => setRole('Participant')}
-                className={`border-2 rounded-xl p-5 cursor-pointer transition-all flex flex-col items-center text-center gap-2 ${
+                className={`border-2 rounded-xl p-5 cursor-pointer transition-all flex flex-col items-center text-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
                   role === 'Participant'
                     ? 'border-brand-primary bg-brand-primary/5 shadow-xs'
                     : 'border-brand-border hover:border-brand-primary/50 hover:bg-brand-bg'
@@ -151,7 +162,7 @@ export const OnboardingPage: React.FC = () => {
                 <span className="text-xs text-brand-muted">
                   Join quiz competitions, view immediate scores, and access live proctored arenas.
                 </span>
-              </div>
+              </button>
 
             </div>
           </div>
@@ -171,10 +182,12 @@ export const OnboardingPage: React.FC = () => {
               <input
                 type="text"
                 required
+                disabled={loading}
+                maxLength={15}
                 value={cnic}
                 onChange={handleCnicChange}
                 placeholder="XXXXX-XXXXXXX-X"
-                className="w-full bg-brand-bg border border-brand-border rounded-lg pl-10 pr-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none transition-all text-sm font-mono tracking-widest"
+                className="w-full bg-brand-bg border border-brand-border rounded-lg pl-10 pr-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none transition-all text-sm font-mono tracking-widest disabled:opacity-50"
                 id="onboard-cnic-input"
               />
             </div>
