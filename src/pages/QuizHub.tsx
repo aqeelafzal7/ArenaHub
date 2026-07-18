@@ -33,9 +33,7 @@ import {
   X, 
   CornerDownLeft, 
   BookOpen,
-  RefreshCw,
-  Download,
-  Laptop
+  RefreshCw
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import * as tf from '@tensorflow/tfjs';
@@ -99,42 +97,6 @@ const SUSPICIOUS_KEYWORDS = [
 export const QuizHub: React.FC = () => {
   const { user, profile, theme, isQuizStarted, setIsQuizStarted } = useAuth();
   const isColorblind = theme === 'colorblind';
-
-  const [isStandalone, setIsStandalone] = useState<boolean>(
-    window.matchMedia('(display-mode: standalone)').matches
-  );
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-
-  useEffect(() => {
-    // Capture the install prompt to trigger it manually via button
-    const handleBeforeInstallPrompt = (e: any) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
-    // Listen for display mode changes (in case they install and it auto-opens)
-    const mediaQuery = window.matchMedia('(display-mode: standalone)');
-    const handleChange = (e: MediaQueryListEvent) => setIsStandalone(e.matches);
-    mediaQuery.addEventListener('change', handleChange);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      mediaQuery.removeEventListener('change', handleChange);
-    };
-  }, []);
-
-  const handleInstallClick = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setDeferredPrompt(null);
-      }
-    } else {
-      alert("To install: Click the 'Install App' icon in your browser's URL bar, or tap 'Share' > 'Add to Home Screen' on mobile.");
-    }
-  };
 
   // Camera/Proctor stream states
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -539,15 +501,6 @@ export const QuizHub: React.FC = () => {
 
       setActiveAttemptId(attemptId);
       setTimeLeft(activeQuiz.timeLimit * 60);
-
-      try {
-        if (document.documentElement.requestFullscreen) {
-          await document.documentElement.requestFullscreen();
-        }
-      } catch (err) {
-        console.log("Full-screen request failed or blocked by browser.");
-      }
-
       setIsQuizStarted(true);
       setCurrentQuestionIdx(0);
       setAnswers({});
@@ -842,33 +795,6 @@ export const QuizHub: React.FC = () => {
     }
   }, [aiWarning]);
 
-  // Full-Screen Exit Tripwire
-  useEffect(() => {
-    if (!isQuizStarted || !activeAttemptId) return;
-
-    const handleFullscreenChange = async () => {
-      if (!document.fullscreenElement) {
-        // The user pressed Esc or exited full screen!
-        const logMsg = "AI Flag: Participant exited Full-Screen Mode (Possible app switching)";
-
-        try {
-          await updateDoc(doc(db, 'attempts', activeAttemptId), {
-            cheatFlags: arrayUnion(logMsg),
-            updatedAt: serverTimestamp()
-          });
-        } catch (err) {
-          console.error("Failed to log full-screen exit cheat flag:", err);
-        }
-
-        // Re-request full screen immediately to keep them compliant
-        try { document.documentElement.requestFullscreen(); } catch (e) {}
-      }
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, [isQuizStarted, activeAttemptId]);
-
   // Compulsory Verification Snapshots (5 shots spaced evenly)
   useEffect(() => {
     if (!isQuizStarted || !activeAttemptId || !activeQuiz) {
@@ -1134,84 +1060,59 @@ export const QuizHub: React.FC = () => {
       
       {/* 1. PORTAL ACCESS (HUB ENTRY SCREEN) */}
       {!activeHub && !finalAttempt && (
-        !isStandalone ? (
-          <div className="flex flex-col items-center justify-center p-8 bg-brand-card border border-brand-border rounded-xl shadow-lg max-w-lg mx-auto text-center mt-10">
-            <div className="bg-red-500/10 p-4 rounded-full mb-4">
-              <ShieldAlert className="h-10 w-10 text-red-500"/>
+        <motion.div 
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-brand-card border border-brand-border rounded-2xl p-8 max-w-lg mx-auto shadow-lg"
+        >
+          <div className="text-center mb-6">
+            <div className="bg-brand-primary/10 text-brand-primary p-3 rounded-full inline-flex items-center justify-center mb-3">
+              <Lock className="h-8 w-8" />
             </div>
-            <h2 className="text-xl font-bold text-brand-text mb-2 animate-pulse">Secure App Required</h2>
-            <p className="text-sm text-brand-muted mb-6">
-              To maintain academic integrity and prevent cheating, participants cannot take exams in a standard web browser. You must download and install the secure ArenaHub application.
-            </p>
-
-            <button
-              onClick={handleInstallClick}
-              className="w-full flex items-center justify-center gap-2 bg-brand-primary text-white py-3 px-4 rounded-lg font-bold hover:bg-opacity-90 transition-all shadow-md cursor-pointer"
-            >
-              <Download className="h-5 w-5"/>
-              Download Secure App
-            </button>
-
-            <p className="text-xs text-brand-muted mt-4 flex items-center justify-center gap-1">
-              <Laptop className="h-3 w-3"/>
-              Supports Windows, Mac, iOS & Android
+            <h2 className="text-2xl font-bold tracking-tight text-brand-text">Enter Participant Arena</h2>
+            <p className="text-xs text-brand-muted mt-1">
+              Input your organization's custom Hub ID to load branding configurations.
             </p>
           </div>
-        ) : (
-          <motion.div 
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-brand-card border border-brand-border rounded-2xl p-8 max-w-lg mx-auto shadow-lg"
-          >
-            <div className="text-center mb-6">
-              <div className="bg-brand-primary/10 text-brand-primary p-3 rounded-full inline-flex items-center justify-center mb-3">
-                <Lock className="h-8 w-8" />
+
+          {error && (
+            <div className={`mb-6 p-4 border-l-4 rounded-r-lg text-sm font-medium flex items-center gap-2 ${
+              isColorblind
+                ? 'bg-orange-50 border-orange-500 text-orange-950'
+                : 'bg-red-50 border-red-500 text-red-800'
+            }`}>
+              <AlertOctagon className="h-5 w-5 shrink-0" />
+              <div>
+                <span className="font-bold">{isColorblind ? '[ERROR] ' : ''}</span>
+                {error}
               </div>
-              <h2 className="text-2xl font-bold tracking-tight text-brand-text">Enter Participant Arena</h2>
-              <p className="text-xs text-brand-muted mt-1">
-                Input your organization's custom Hub ID to load branding configurations.
-              </p>
+            </div>
+          )}
+
+          <form onSubmit={handleLoadHub} className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-brand-text mb-1">Organization Hub ID</label>
+              <input
+                type="text"
+                required
+                value={hubIdInput}
+                onChange={(e) => setHubIdInput(e.target.value)}
+                placeholder="Paste Hub ID Code here"
+                className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none text-sm font-mono text-center font-semibold"
+                id="hub-search-input"
+              />
             </div>
 
-            {error && (
-              <div className={`mb-6 p-4 border-l-4 rounded-r-lg text-sm font-medium flex items-center gap-2 ${
-                isColorblind
-                  ? 'bg-orange-50 border-orange-500 text-orange-950'
-                  : 'bg-red-50 border-red-500 text-red-800'
-              }`}>
-                <AlertOctagon className="h-5 w-5 shrink-0" />
-                <div>
-                  <span className="font-bold">{isColorblind ? '[ERROR] ' : ''}</span>
-                  {error}
-                </div>
-              </div>
-            )}
-
-            <form onSubmit={handleLoadHub} className="space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-brand-text mb-1">Organization Hub ID</label>
-                <input
-                  type="text"
-                  required
-                  value={hubIdInput}
-                  onChange={(e) => setHubIdInput(e.target.value)}
-                  placeholder="Paste Hub ID Code here"
-                  className="w-full bg-brand-bg border border-brand-border rounded-lg px-4 py-2.5 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/50 outline-none text-sm font-mono text-center font-semibold"
-                  id="hub-search-input"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-brand-primary text-white py-2.5 rounded-lg font-bold text-sm tracking-wide hover:bg-opacity-95 transition-all flex items-center justify-center gap-1 cursor-pointer"
-                id="hub-search-submit"
-              >
-                Load Custom Hub <ArrowRight className="h-4 w-4" />
-              </button>
-            </form>
-          </motion.div>
-        )
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-brand-primary text-white py-2.5 rounded-lg font-bold text-sm tracking-wide hover:bg-opacity-95 transition-all flex items-center justify-center gap-1 cursor-pointer"
+              id="hub-search-submit"
+            >
+              Load Custom Hub <ArrowRight className="h-4 w-4" />
+            </button>
+          </form>
+        </motion.div>
       )}
 
       {/* 2. QUIZ CODE ENTRY (INSIDE BRANDED HUB) */}
