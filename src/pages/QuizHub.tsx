@@ -501,6 +501,15 @@ export const QuizHub: React.FC = () => {
 
       setActiveAttemptId(attemptId);
       setTimeLeft(activeQuiz.timeLimit * 60);
+
+      try {
+        if (document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen();
+        }
+      } catch (err) {
+        console.log("Full-screen request failed or blocked by browser.");
+      }
+
       setIsQuizStarted(true);
       setCurrentQuestionIdx(0);
       setAnswers({});
@@ -794,6 +803,33 @@ export const QuizHub: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [aiWarning]);
+
+  // Full-Screen Exit Tripwire
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId) return;
+
+    const handleFullscreenChange = async () => {
+      if (!document.fullscreenElement) {
+        // The user pressed Esc or exited full screen!
+        const logMsg = "AI Flag: Participant exited Full-Screen Mode (Possible app switching)";
+
+        try {
+          await updateDoc(doc(db, 'attempts', activeAttemptId), {
+            cheatFlags: arrayUnion(logMsg),
+            updatedAt: serverTimestamp()
+          });
+        } catch (err) {
+          console.error("Failed to log full-screen exit cheat flag:", err);
+        }
+
+        // Re-request full screen immediately to keep them compliant
+        try { document.documentElement.requestFullscreen(); } catch (e) {}
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [isQuizStarted, activeAttemptId]);
 
   // Compulsory Verification Snapshots (5 shots spaced evenly)
   useEffect(() => {
