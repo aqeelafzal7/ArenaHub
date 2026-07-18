@@ -158,7 +158,7 @@ export const QuizHub: React.FC = () => {
   // Taking States
   const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
-  const [answers, setAnswers] = useState<{ [qId: string]: number }>({});
+  const [answers, setAnswers] = useState<{ [qId: string]: string }>({});
   
   // Timer States
   const [timeLeft, setTimeLeft] = useState(0); // in seconds
@@ -269,6 +269,7 @@ export const QuizHub: React.FC = () => {
           qList.push({
             ...q,
             options: shuffledOptions,
+            originalOptions: q.options,
           });
         });
         
@@ -427,6 +428,7 @@ export const QuizHub: React.FC = () => {
           qList.push({
             ...q,
             options: shuffledOptions,
+            originalOptions: q.options,
           });
         });
         
@@ -543,7 +545,9 @@ export const QuizHub: React.FC = () => {
       let correctCount = 0;
       quizQuestions.forEach((q) => {
         const selected = answers[q.id];
-        if (selected !== undefined && selected === q.correctOption) {
+        const originalOptions = q.originalOptions || q.options;
+        const correctText = originalOptions[q.correctOption];
+        if (selected !== undefined && selected === correctText) {
           correctCount++;
         }
       });
@@ -1391,7 +1395,7 @@ export const QuizHub: React.FC = () => {
             <div className="space-y-3.5">
               {quizQuestions[currentQuestionIdx].options.map((option, idx) => {
                 const qId = quizQuestions[currentQuestionIdx].id;
-                const isSelected = answers[qId] === idx;
+                const isSelected = answers[qId] === option;
 
                 return (
                   <div
@@ -1399,7 +1403,7 @@ export const QuizHub: React.FC = () => {
                     onClick={() => {
                       if (isQuestionMutationsLocked) return;
                       setAnswers((prev) => {
-                        const updated = { ...prev, [qId]: idx };
+                        const updated = { ...prev, [qId]: option };
                         localStorage.setItem('arena_saved_answers', JSON.stringify(updated));
                         return updated;
                       });

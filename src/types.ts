@@ -42,6 +42,7 @@ export interface Question {
   options: string[];
   correctOption: number; // index (0 to 3)
   imageUrl?: string;
+  originalOptions?: string[];
 }
 
 export interface Attempt {

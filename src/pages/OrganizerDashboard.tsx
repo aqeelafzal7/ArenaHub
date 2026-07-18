@@ -87,6 +87,8 @@ export const OrganizerDashboard: React.FC = () => {
   const [totalAttemptsAllowed, setTotalAttemptsAllowed] = useState<number>(1);
   const [allowedCnics, setAllowedCnics] = useState<string[]>([]);
   const [cnicInputValue, setCnicInputValue] = useState('');
+  const [cnicImportFeedback, setCnicImportFeedback] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const cnicCsvInputRef = useRef<HTMLInputElement>(null);
   const [openAt, setOpenAt] = useState<string>('');
   const [closeAt, setCloseAt] = useState<string>('');
   const [postSubmissionText, setPostSubmissionText] = useState('');
@@ -597,6 +599,8 @@ export const OrganizerDashboard: React.FC = () => {
     if (selectedQuiz) {
       setTotalAttemptsAllowed(selectedQuiz.totalAttemptsAllowed ?? 1);
       setAllowedCnics(selectedQuiz.allowedCnics || []);
+      setCnicInputValue('');
+      setCnicImportFeedback(null);
       setOpenAt(formatIsoForDatetimeLocal(selectedQuiz.openAt));
       setCloseAt(formatIsoForDatetimeLocal(selectedQuiz.closeAt));
       setPostSubmissionText(selectedQuiz.postSubmissionText ?? '');
@@ -769,6 +773,83 @@ export const OrganizerDashboard: React.FC = () => {
 
   const removeCnicTag = (tagToRemove: string) => {
     setAllowedCnics(allowedCnics.filter(cnic => cnic !== tagToRemove));
+  };
+
+  const handleCnicCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) return;
+
+      // Split by newline, comma, semicolon, or tab
+      const rawItems = text.split(/[\n\r,;\t]+/);
+      const validCnics: string[] = [];
+      let invalidCount = 0;
+
+      rawItems.forEach((item) => {
+        const clean = item.trim();
+        if (!clean) return;
+
+        // Check if it's already in the XXXXX-XXXXXXX-X format
+        const formattedRegex = /^\d{5}-\d{7}-\d{1}$/;
+        if (formattedRegex.test(clean)) {
+          if (!validCnics.includes(clean)) {
+            validCnics.push(clean);
+          }
+        } else {
+          // Check if it is a 13-digit raw string
+          const rawDigits = clean.replace(/\D/g, '');
+          if (rawDigits.length === 13) {
+            const formatted = `${rawDigits.substring(0, 5)}-${rawDigits.substring(5, 12)}-${rawDigits.substring(12, 13)}`;
+            if (!validCnics.includes(formatted)) {
+              validCnics.push(formatted);
+            }
+          } else {
+            invalidCount++;
+          }
+        }
+      });
+
+      if (validCnics.length > 0) {
+        // Merge with existing CNICs, avoiding duplicates
+        const merged = [...allowedCnics];
+        let addedCount = 0;
+        validCnics.forEach((cnic) => {
+          if (!merged.includes(cnic)) {
+            merged.push(cnic);
+            addedCount++;
+          }
+        });
+
+        setAllowedCnics(merged);
+        setCnicImportFeedback({
+          type: 'success',
+          message: `Successfully imported ${addedCount} new CNIC(s).${invalidCount > 0 ? ` Skipped ${invalidCount} invalid values.` : ''}`
+        });
+      } else {
+        setCnicImportFeedback({
+          type: 'error',
+          message: `No valid CNICs found in file. Ensure format is XXXXX-XXXXXXX-X or 13-digit numbers.`
+        });
+      }
+
+      // Reset file input so same file can be uploaded again if needed
+      if (cnicCsvInputRef.current) {
+        cnicCsvInputRef.current.value = '';
+      }
+    };
+
+    reader.onerror = () => {
+      setCnicImportFeedback({
+        type: 'error',
+        message: 'Failed to read the file.'
+      });
+    };
+
+    reader.readAsText(file);
   };
 
   const handleSaveConstraints = async (e: React.FormEvent) => {
@@ -1560,9 +1641,40 @@ export const OrganizerDashboard: React.FC = () => {
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-brand-text mb-1">
-                            Allowed CNICs (White-list)
-                          </label>
+                          <div className="flex justify-between items-center mb-1">
+                            <label className="block text-xs font-bold text-brand-text">
+                              Allowed CNICs (White-list)
+                            </label>
+                            <div className="flex items-center gap-2">
+                              {allowedCnics.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAllowedCnics([]);
+                                    setCnicImportFeedback(null);
+                                  }}
+                                  className="text-[10px] text-red-500 hover:text-red-600 font-bold transition-colors underline"
+                                >
+                                  Clear All
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => cnicCsvInputRef.current?.click()}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary border border-brand-primary/20 rounded text-[10px] font-bold transition-all"
+                              >
+                                <Upload className="h-2.5 w-2.5" />
+                                Bulk Upload CSV
+                              </button>
+                              <input
+                                type="file"
+                                ref={cnicCsvInputRef}
+                                onChange={handleCnicCsvUpload}
+                                accept=".csv,.txt"
+                                className="hidden"
+                              />
+                            </div>
+                          </div>
 
                           {/* Tag Container */}
                           <div className="flex flex-wrap items-center gap-2 w-full bg-brand-bg border border-brand-border rounded-lg p-2 focus-within:ring-1 focus-within:ring-brand-primary/30 transition-all min-h-[42px]">
@@ -1594,8 +1706,19 @@ export const OrganizerDashboard: React.FC = () => {
                               className="flex-1 min-w-[150px] bg-transparent outline-none text-brand-text placeholder-brand-muted text-xs font-mono tracking-wide"
                             />
                           </div>
+                          
+                          {cnicImportFeedback && (
+                            <div className={`mt-1 text-[9px] font-semibold px-2 py-0.5 rounded border ${
+                              cnicImportFeedback.type === 'success'
+                                ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400'
+                                : 'bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400'
+                            }`}>
+                              {cnicImportFeedback.message}
+                            </div>
+                          )}
+
                           <p className="text-[9px] text-brand-muted mt-1 font-medium">
-                            Press <kbd className="bg-brand-border/50 px-1 py-0.5 rounded text-brand-text font-bold">Enter</kbd> to add a CNIC. Leave empty to allow any registrant.
+                            Press <kbd className="bg-brand-border/50 px-1 py-0.5 rounded text-brand-text font-bold">Enter</kbd> to add a CNIC manually, or upload a CSV/text file of CNICs.
                           </p>
                         </div>
                       </div>
@@ -2401,8 +2524,33 @@ export const OrganizerDashboard: React.FC = () => {
                       const studentAnsVal = auditAttempt.studentAnswers?.[q.id || ''];
                       const correctAnsVal = auditSecureAnswers[q.id || ''];
                       
+                      // Get expected correct string
+                      let correctText = '';
+                      if (correctAnsVal !== undefined) {
+                        if (typeof correctAnsVal === 'number' || !isNaN(Number(correctAnsVal))) {
+                          correctText = q.options[Number(correctAnsVal)] || '';
+                        } else {
+                          correctText = String(correctAnsVal);
+                        }
+                      } else {
+                        correctText = q.options[q.correctOption] || '';
+                      }
+
+                      // Get student selected string
+                      let studentText = '';
+                      if (studentAnsVal !== undefined) {
+                        if (typeof studentAnsVal === 'number' || !isNaN(Number(studentAnsVal))) {
+                          studentText = q.options[Number(studentAnsVal)] || '';
+                        } else {
+                          studentText = String(studentAnsVal);
+                        }
+                      }
+
                       // Determine if correct
-                      const isCorrect = studentAnsVal !== undefined && String(studentAnsVal) === String(correctAnsVal);
+                      const isCorrect = studentAnsVal !== undefined && (
+                        studentText.trim().toLowerCase() === correctText.trim().toLowerCase() ||
+                        String(studentAnsVal) === String(correctAnsVal)
+                      );
                       
                       return (
                         <div 
@@ -2425,8 +2573,14 @@ export const OrganizerDashboard: React.FC = () => {
                           {/* Options list for review */}
                           <div className="mt-3 pl-8 grid grid-cols-1 sm:grid-cols-2 gap-2">
                             {q.options.map((opt, oIdx) => {
-                              const isSelected = studentAnsVal !== undefined && String(studentAnsVal) === String(oIdx);
-                              const isThisCorrect = correctAnsVal !== undefined && String(correctAnsVal) === String(oIdx);
+                              const isSelected = studentAnsVal !== undefined && (
+                                String(studentAnsVal) === String(oIdx) ||
+                                String(studentAnsVal).trim().toLowerCase() === opt.trim().toLowerCase()
+                              );
+                              const isThisCorrect = correctAnsVal !== undefined && (
+                                String(correctAnsVal) === String(oIdx) ||
+                                String(correctAnsVal).trim().toLowerCase() === opt.trim().toLowerCase()
+                              );
                               
                               return (
                                 <div 
@@ -2448,39 +2602,21 @@ export const OrganizerDashboard: React.FC = () => {
                                 </div>
                               );
                             })}
-                          </div>
-
-                          {/* Summary of answers */}
-                          <div className="mt-3 pt-3 border-t border-brand-border/40 text-xs flex flex-col gap-1 pl-8">
-                            <div>
-                              <span className="text-brand-muted">Student's Selection: </span>
-                              <span className={isCorrect ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                {studentAnsVal !== undefined ? (
-                                  typeof studentAnsVal === 'number' || !isNaN(Number(studentAnsVal)) ? (
-                                    `Option ${String.fromCharCode(65 + Number(studentAnsVal))} - ${q.options[Number(studentAnsVal)] || ''}`
-                                  ) : (
-                                    String(studentAnsVal)
-                                  )
-                                ) : (
-                                  'Skipped / Unanswered'
-                                )}
+                                  {/* Summary of answers */}
+                          <div className="mt-3 bg-brand-bg p-3 rounded-lg border border-brand-border ml-8">
+                            <p className="text-sm">
+                              <span className="font-bold text-brand-text">Candidate's Selection: </span>
+                              <span className={`font-bold ${isCorrect ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                {studentText || "No Answer Provided"} {isCorrect ? '(✔️ CORRECT)' : '(❌ INCORRECT)'}
                               </span>
-                            </div>
-                            <div>
-                              <span className="text-brand-muted">Correct Answer: </span>
-                              <span className="text-emerald-600 font-bold">
-                                {correctAnsVal !== undefined ? (
-                                  typeof correctAnsVal === 'number' || !isNaN(Number(correctAnsVal)) ? (
-                                    `Option ${String.fromCharCode(65 + Number(correctAnsVal))} - ${q.options[Number(correctAnsVal)] || ''}`
-                                  ) : (
-                                    String(correctAnsVal)
-                                  )
-                                ) : (
-                                  `Option ${String.fromCharCode(65 + q.correctOption)} - ${q.options[q.correctOption] || ''}`
-                                )}
+                            </p>
+                            <p className="text-sm mt-1">
+                              <span className="font-bold text-brand-text">Official Answer Key: </span>
+                              <span className="font-bold text-brand-primary">
+                                {correctText}
                               </span>
-                            </div>
-                          </div>
+                            </p>
+                          </div>                     </div>
                         </div>
                       );
                     })
@@ -2663,27 +2799,27 @@ export const OrganizerDashboard: React.FC = () => {
             {auditQuestions.map((q, index) => {
               const studentAnsVal = auditAttempt.studentAnswers?.[q.id || ''];
               const correctAnsVal = auditSecureAnswers[q.id || ''];
-              const isCorrect = studentAnsVal !== undefined && String(studentAnsVal) === String(correctAnsVal);
-              
-              let studentAnsText = 'Skipped / No Answer';
-              if (studentAnsVal !== undefined) {
-                if (typeof studentAnsVal === 'number' || !isNaN(Number(studentAnsVal))) {
-                  studentAnsText = `Option ${String.fromCharCode(65 + Number(studentAnsVal))} - ${q.options[Number(studentAnsVal)] || ''}`;
-                } else {
-                  studentAnsText = String(studentAnsVal);
-                }
-              }
 
-              let correctAnsText = 'Unknown';
+              const studentAnswerText = studentAnsVal !== undefined
+                ? (typeof studentAnsVal === 'number' || !isNaN(Number(studentAnsVal))
+                    ? q.options[Number(studentAnsVal)] || String(studentAnsVal)
+                    : String(studentAnsVal))
+                : '';
+
+              let correctAnswerText = '';
               if (correctAnsVal !== undefined) {
                 if (typeof correctAnsVal === 'number' || !isNaN(Number(correctAnsVal))) {
-                  correctAnsText = `Option ${String.fromCharCode(65 + Number(correctAnsVal))} - ${q.options[Number(correctAnsVal)] || ''}`;
+                  correctAnswerText = q.options[Number(correctAnsVal)] || '';
                 } else {
-                  correctAnsText = String(correctAnsVal);
+                  correctAnswerText = String(correctAnsVal);
                 }
               } else {
-                correctAnsText = `Option ${String.fromCharCode(65 + q.correctOption)} - ${q.options[q.correctOption] || ''}`;
+                correctAnswerText = q.options[q.correctOption] || '';
               }
+
+              const isCorrect = studentAnsVal !== undefined && (
+                studentAnswerText.trim().toLowerCase() === correctAnswerText.trim().toLowerCase()
+              );
 
               return (
                 <div key={q.id || index} style={{ marginBottom: '24px', pageBreakInside: 'avoid' }}>
@@ -2699,13 +2835,13 @@ export const OrganizerDashboard: React.FC = () => {
 
                   <div style={{ marginLeft: '20px', backgroundColor: '#f9fafb', padding: '12px', borderLeft: '4px solid #9ca3af' }}>
                     <p style={{ margin: '0 0 4px 0', fontSize: '14px' }}>
-                      <span style={{ fontWeight: 'bold' }}>Candidate's Selection:</span> {studentAnsText} 
+                      <span style={{ fontWeight: 'bold' }}>Candidate's Selection:</span> {studentAnswerText || "No Answer Provided"} 
                       <span style={{ marginLeft: '8px', fontWeight: 'bold', color: isCorrect ? '#16a34a' : '#dc2626' }}>
                         {studentAnsVal !== undefined ? (isCorrect ? '(✔️ CORRECT)' : '(❌ INCORRECT)') : ''}
                       </span>
                     </p>
                     <p style={{ margin: '0', fontSize: '14px' }}>
-                      <span style={{ fontWeight: 'bold' }}>Official Answer Key:</span> {correctAnsText}
+                      <span style={{ fontWeight: 'bold' }}>Official Answer Key:</span> {correctAnswerText}
                     </p>
                   </div>
                   {index < auditQuestions.length - 1 && (
