@@ -1,16 +1,23 @@
 {
   "short_name": "ArenaHub",
   "name": "ArenaHub Secure Exam Portal",
-  "start_url": ".",
+  "start_url": "/",
   "display": "standalone",
   "theme_color": "#0f172a",
   "background_color": "#0f172a",
   "description": "Secure proctoring portal for the National IQ Olympiad",
   "icons": [
     {
-      "src": "favicon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
+      "src": "/pwa-icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
     }
   ]
 }
