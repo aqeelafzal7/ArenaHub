@@ -1,20 +1,38 @@
 <div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+  
+  # 🛡️ ArenaHub
+  **SaaS Multi-Tenant Secure Quiz & Evaluation Platform**
+
+  A highly secure, proctored academic assessment portal designed to maintain the highest standards of academic integrity. Features AI-driven proctoring, multi-tenant organization hubs, and military-grade progressive web app (PWA) lockdown capabilities.
+
 </div>
 
-# Run and deploy your AI Studio app
+---
 
-This contains everything you need to run your app locally.
+## ✨ Core Features
 
-View your app in AI Studio: https://ai.studio/apps/15da9689-d8b8-4e22-a864-e6cf9a49e494
+*   **Enterprise Proctoring & Kiosk Mode:** Participants are restricted from using standard web browsers. The platform enforces a mandatory PWA installation and requires full-screen standalone mode. Background tracking and tripwires instantly detect app-switching or minimization.
+*   **Live AI Monitoring:** Continuous behavioral monitoring tracks window focus, audio anomalies, and webcam snapshots, logging all infractions instantly to a real-time database.
+*   **Multi-Tenant Architecture:** Organizers can generate custom "Hub IDs," allowing different universities, societies, or classes to take branded, isolated exams simultaneously.
+*   **Advanced Forensic Audits:** Generates comprehensive, perfectly formatted PDF audit reports for every attempt. It permanently solves shuffled-index grading issues and prevents page-break clipping for easy administrative review.
+*   **YouTube-Style Tag Inputs:** Advanced UI/UX for CNIC white-listing, allowing organizers to easily whitelist participants with strict format validation (XXXXX-XXXXXXX-X).
+*   **Dark Mode & Glassmorphism UI:** A sleek, fully responsive design system utilizing Tailwind CSS that adapts to user preferences.
 
-## Run Locally
+## 🛠️ Technology Stack
 
-**Prerequisites:**  Node.js
+*   **Frontend Ecosystem:** React.js, Vite, TypeScript
+*   **Styling & UI:** Tailwind CSS, Framer Motion, Lucide React Icons
+*   **Backend & Database:** Firebase (Firestore NoSQL) - *Highly optimized for read/write efficiency*
+*   **Security Shell:** Progressive Web App (PWA) architecture with Service Workers
+*   **Deployment & Hosting:** Cloudflare Pages & GitHub Actions
 
+---
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## 🚀 Run Locally
+
+**Prerequisites:** You must have [Node.js](https://nodejs.org/) installed on your machine.
+
+1. **Clone the repository:**
+   ```bash
+   git clone [https://github.com/aqeelafzal7/ArenaHub.git](https://github.com/aqeelafzal7/ArenaHub.git)
+   cd ArenaHub
