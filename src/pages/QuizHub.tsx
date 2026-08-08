@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { SecureText } from '../components/SecureText';
+import { PwaGateway } from '../components/PwaGateway';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 
 declare global {
@@ -69,6 +71,7 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({ srcStream, videoRef }) => {
         </span>
       </div>
     </div>
+
   );
 };
 
@@ -162,12 +165,16 @@ export const QuizHub: React.FC = () => {
   
   // Timer States
   const [timeLeft, setTimeLeft] = useState(0); // in seconds
+  const [questionTimer, setQuestionTimer] = useState<number | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const questionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isSubmittingRef = useRef(false);
+  const strikeCount = useRef(0);
   const cheatFlagsRef = useRef<string[]>([]);
   const lastUploadTimeRef = useRef<number>(0);
   const compulsoryShotsTakenRef = useRef(0);
   const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<any>(null);
   const isListeningRef = useRef(false);
   const speechThrottleRef = useRef<number>(0);
 
@@ -259,12 +266,12 @@ export const QuizHub: React.FC = () => {
         const hubData = hubDoc.data() as Hub;
         const quizData = quizDoc.data() as Quiz;
 
-        // Fetch Questions pool
-        const qQuery = query(collection(db, 'questions'), where('quizId', '==', quizId));
-        const questionsSnap = await getDocs(qQuery);
+        // Fetch Questions pool from Hub document
         let qList: Question[] = [];
-        questionsSnap.forEach((docSnap) => {
-          const q = docSnap.data() as Question;
+        const allQuestions = hubData.questions || [];
+        const filteredQuestions = allQuestions.filter(q => q.quizId === quizId);
+        
+        filteredQuestions.forEach((q) => {
           const shuffledOptions = q.options ? shuffleArray(q.options) : [];
           qList.push({
             ...q,
@@ -308,7 +315,9 @@ export const QuizHub: React.FC = () => {
     hydrateActiveSession();
   }, [user]);
 
-  // 1. Fetch Hub branding
+  // 1. Fetch Hub branding and Questions
+  const [questions, setQuestions] = useState<Question[]>([]);
+
   const handleLoadHub = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -319,7 +328,13 @@ export const QuizHub: React.FC = () => {
     try {
       const docSnap = await getDoc(doc(db, 'hubs', targetHubId));
       if (docSnap.exists()) {
-        setActiveHub(docSnap.data() as Hub);
+        const hubData = docSnap.data() as Hub;
+        setActiveHub(hubData);
+        if (hubData.questions) {
+          setQuestions(hubData.questions);
+        } else {
+          setQuestions([]);
+        }
       } else {
         setError('No organization Hub found with this ID code.');
       }
@@ -352,7 +367,7 @@ export const QuizHub: React.FC = () => {
     return null; // within window
   };
 
-  // 2. Fetch Quiz and questions
+  // 2. Fetch Quiz
   const handleLoadQuiz = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeHub) return;
@@ -418,12 +433,11 @@ export const QuizHub: React.FC = () => {
 
         setActiveQuiz(quizData);
 
-        // Fetch questions pool
-        const qQuery = query(collection(db, 'questions'), where('quizId', '==', targetQuizId));
-        const questionsSnap = await getDocs(qQuery);
+        // Filter questions from local state instead of doing another getDocs
         let qList: Question[] = [];
-        questionsSnap.forEach((docSnap) => {
-          const q = docSnap.data() as Question;
+        const filteredQuestions = questions.filter(q => q.quizId === targetQuizId);
+        
+        filteredQuestions.forEach((q) => {
           const shuffledOptions = q.options ? shuffleArray(q.options) : [];
           qList.push({
             ...q,
@@ -635,6 +649,21 @@ export const QuizHub: React.FC = () => {
         try {
           setCameraStatus('Requesting...');
           const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          
+          let options: any = { mimeType: 'video/webm;codecs=vp9,opus' };
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options = { mimeType: 'video/webm;codecs=vp8,opus' }; // Fallback
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+              options = { mimeType: 'video/mp4' }; // Safari fallback
+              if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                options = { mimeType: '' }; // Let browser decide
+              }
+            }
+          }
+          const mediaRecorder = new MediaRecorder(mediaStream, options);
+          mediaRecorderRef.current = mediaRecorder;
+          mediaRecorder.start();
+
           setAndRefStream(mediaStream);
           setCameraStatus('Active');
         } catch (err: any) {
@@ -698,71 +727,71 @@ export const QuizHub: React.FC = () => {
 
         const interval = setInterval(async () => {
           if (isCancelled || !videoRef.current || videoRef.current.readyState < 2) return;
-
           try {
             const videoEl = videoRef.current;
-
+            
             // 1. Detect cell phones (coco-ssd)
             const predictions = await cocoModel.detect(videoEl);
             const hasPhone = predictions.some((pred: any) => pred.class === 'cell phone');
-
-            if (hasPhone) {
-              console.log('AI Detected: Cell Phone');
-              await updateDoc(doc(db, 'attempts', activeAttemptId), {
-                cheatFlags: arrayUnion('AI Flag: Cell Phone Detected')
-              });
-              setAiWarning('Warning: Suspicious activity detected by camera.');
-
-              const now = Date.now();
-              if (now - lastUploadTimeRef.current > 45000) { // 45-second throttling lock
-                lastUploadTimeRef.current = now;
-                
-                // Capture image asynchronously
-                captureAndUploadSnapshot('Phone_Violation').then(async (driveUrl) => {
-                  if (driveUrl) {
-                    const logMsg = `AI Flag: Cell Phone Detected [Proof Link: ${driveUrl}]`;
-                    
-                    // Update firestore attempt log dynamically
-                    await updateDoc(doc(db, 'attempts', activeAttemptId), {
-                      cheatFlags: arrayUnion(logMsg),
-                      updatedAt: serverTimestamp()
-                    });
-                  }
-                });
-              }
-            }
-
+            
             // 2. Detect multiple faces (blazeface)
             const faces = await faceModel.estimateFaces(videoEl, false);
-            if (faces.length > 1) {
-              console.log('AI Detected: Multiple People');
-              await updateDoc(doc(db, 'attempts', activeAttemptId), {
-                cheatFlags: arrayUnion('AI Flag: Multiple People Detected')
-              });
-              setAiWarning('Warning: Suspicious activity detected by camera.');
+            // Increase Confidence: Set the face detection model's minimum confidence score threshold to 0.85
+            const highConfidenceFaces = faces.filter((f: any) => {
+              const prob = Array.isArray(f.probability) ? f.probability[0] : f.probability;
+              return prob > 0.85;
+            });
 
-              const now = Date.now();
-              if (now - lastUploadTimeRef.current > 45000) { // 45-second throttling lock
-                lastUploadTimeRef.current = now;
-                
-                // Capture image asynchronously
-                captureAndUploadSnapshot('MultiFace_Violation').then(async (driveUrl) => {
-                  if (driveUrl) {
-                    const logMsg = `AI Flag: Multiple People Detected [Proof Link: ${driveUrl}]`;
-                    
-                    // Update firestore attempt log dynamically
-                    await updateDoc(doc(db, 'attempts', activeAttemptId), {
-                      cheatFlags: arrayUnion(logMsg),
-                      updatedAt: serverTimestamp()
-                    });
-                  }
-                });
+            let isViolation = false;
+            let violationType = '';
+
+            if (hasPhone) {
+              isViolation = true;
+              violationType = 'Cell Phone Detected';
+            } else if (highConfidenceFaces.length > 1) {
+              isViolation = true;
+              violationType = 'Multiple People Detected';
+            } else if (highConfidenceFaces.length === 0) {
+              isViolation = true;
+              violationType = 'No Face Detected';
+            }
+
+            if (isViolation) {
+              strikeCount.current += 1;
+              console.log(`AI Detected: ${violationType} (Strike ${strikeCount.current})`);
+              
+              if (strikeCount.current >= 3) {
+                setAiWarning(`Warning: ${violationType}. Please ensure your face is visible and no phones are in view.`);
+                const now = Date.now();
+                if (now - lastUploadTimeRef.current > 45000) { // 45-second throttling lock
+                  lastUploadTimeRef.current = now;
+                  
+                  await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                    cheatFlags: arrayUnion(`AI Flag: ${violationType}`)
+                  });
+                  
+                  // Capture image asynchronously
+                  captureAndUploadSnapshot(violationType.replace(/ /g, '_')).then(async (driveUrl) => {
+                    if (driveUrl) {
+                      const logMsg = `AI Flag: ${violationType} [Proof Link: ${driveUrl}]`;
+                      
+                      // Update firestore attempt log dynamically
+                      await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                        cheatFlags: arrayUnion(logMsg),
+                        updatedAt: serverTimestamp()
+                      });
+                    }
+                  });
+                }
               }
+            } else {
+              strikeCount.current = 0;
+              setAiWarning('');
             }
           } catch (err) {
             console.error('AI Frame detection evaluation error:', err);
           }
-        }, 3000);
+        }, 2000);
 
         aiIntervalRef.current = interval;
         if (isCancelled) {
@@ -952,6 +981,39 @@ export const QuizHub: React.FC = () => {
     };
   }, [isQuizStarted, exactStartTime, activeQuiz, handleSubmitQuiz]);
 
+  // 4.1 Time Starvation / Per-Question Timer Logic
+  useEffect(() => {
+    if (!isQuizStarted || !activeQuiz?.perQuestionTimer || !activeQuiz?.timePerQuestionSeconds) {
+      setQuestionTimer(null);
+      return;
+    }
+    setQuestionTimer(activeQuiz.timePerQuestionSeconds);
+  }, [isQuizStarted, activeQuiz, currentQuestionIdx]);
+
+  useEffect(() => {
+    if (questionTimer === null || !isQuizStarted || isQuestionMutationsLocked) return;
+
+    if (questionTimer <= 0) {
+      if (questionTimerRef.current) clearInterval(questionTimerRef.current);
+      
+      // Auto-submit current answer (or lack thereof) and move to next question
+      if (currentQuestionIdx < quizQuestions.length - 1) {
+        setCurrentQuestionIdx((p) => p + 1);
+      } else {
+        handleSubmitQuiz('Submitted');
+      }
+      return;
+    }
+
+    questionTimerRef.current = setInterval(() => {
+      setQuestionTimer((prev) => (prev !== null ? prev - 1 : null));
+    }, 1000);
+
+    return () => {
+      if (questionTimerRef.current) clearInterval(questionTimerRef.current);
+    };
+  }, [questionTimer, isQuizStarted, isQuestionMutationsLocked, currentQuestionIdx, quizQuestions.length, handleSubmitQuiz]);
+
   // 4.5 Listen for Admin Remote Override (forceLocked)
   useEffect(() => {
     if (!activeAttemptId || !isQuizStarted) return;
@@ -1055,7 +1117,8 @@ export const QuizHub: React.FC = () => {
   const hasSelectedOption = currentQuestionId ? answers[currentQuestionId] !== undefined : false;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
+    <PwaGateway>
+      <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
       <canvas ref={canvasRef} className="hidden" width={640} height={480} />
       
       {/* 1. PORTAL ACCESS (HUB ENTRY SCREEN) */}
@@ -1345,7 +1408,7 @@ export const QuizHub: React.FC = () => {
                 <span className="text-sm font-black text-brand-text truncate max-w-[200px] md:max-w-xs block">{activeQuiz.title}</span>
               </div>
             </div>
-
+            
             {/* Timer & Refresh widget */}
             <div className="flex items-center gap-2">
               <button 
@@ -1355,6 +1418,15 @@ export const QuizHub: React.FC = () => {
               >
                 <RefreshCw className="h-5 w-5 text-brand-muted group-hover:text-brand-primary transition-colors"/>
               </button>
+
+              {activeQuiz.perQuestionTimer && questionTimer !== null && (
+                <div className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs ${
+                  questionTimer <= 5 ? 'animate-pulse bg-red-100 border border-red-400 text-red-900' : 'bg-brand-bg border border-brand-border text-brand-text'
+                }`}>
+                  <Timer className="h-5 w-5" />
+                  Q-Time: 00:{questionTimer < 10 ? `0${questionTimer}` : questionTimer}
+                </div>
+              )}
 
               <div className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs animate-bounce ${
                 isColorblind 
@@ -1384,15 +1456,17 @@ export const QuizHub: React.FC = () => {
               ></div>
             </div>
           </div>
-
           {/* Question Card */}
-          <div className="bg-brand-card border border-brand-border rounded-2xl p-8 shadow-xs">
+          <div className="bg-brand-card border border-brand-border rounded-2xl p-8 shadow-xs relative overflow-hidden bg-[repeating-linear-gradient(45deg,transparent,transparent_2px,rgba(0,0,0,0.03)_2px,rgba(0,0,0,0.03)_4px)] dark:bg-[repeating-linear-gradient(45deg,transparent,transparent_2px,rgba(255,255,255,0.02)_2px,rgba(255,255,255,0.02)_4px)]">
             <h3 className="text-lg font-extrabold text-brand-text mb-6">
-              {quizQuestions[currentQuestionIdx].text}
+              <SecureText>{quizQuestions[currentQuestionIdx].text}</SecureText>
             </h3>
+            {quizQuestions[currentQuestionIdx].imageUrl && (
+              <img src={quizQuestions[currentQuestionIdx].imageUrl} alt="Question Graphic" className="max-w-full h-auto mb-4 rounded-md" />
+            )}
 
             {/* Answer Options */}
-            <div className="space-y-3.5">
+            <div className="space-y-3.5 relative z-10">
               {quizQuestions[currentQuestionIdx].options.map((option, idx) => {
                 const qId = quizQuestions[currentQuestionIdx].id;
                 const isSelected = answers[qId] === option;
@@ -1413,7 +1487,7 @@ export const QuizHub: React.FC = () => {
                         ? isColorblind
                           ? 'border-blue-700 bg-blue-50/20 text-blue-900 shadow-sm'
                           : 'border-brand-primary bg-brand-primary/5 shadow-xs'
-                        : 'border-brand-border hover:border-brand-primary/50 hover:bg-brand-bg'
+                        : 'border-brand-border hover:border-brand-primary/50 hover:bg-brand-bg/50 bg-brand-bg/80'
                     }`}
                   >
                     <div className="flex items-center gap-3">
@@ -1426,9 +1500,8 @@ export const QuizHub: React.FC = () => {
                       }`}>
                         {String.fromCharCode(65 + idx)}
                       </span>
-                      <span className="text-sm font-semibold text-brand-text">{option}</span>
+                      <span className="text-sm font-semibold text-brand-text"><SecureText>{option}</SecureText></span>
                     </div>
-
                     {isSelected && (
                       isColorblind ? (
                         <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">[SELECTED]</span>
@@ -1444,15 +1517,17 @@ export const QuizHub: React.FC = () => {
 
           {/* Navigation controller */}
           <div className="flex justify-between items-center gap-4">
-            <button
-              onClick={() => setCurrentQuestionIdx((p) => Math.max(0, p - 1))}
-              disabled={currentQuestionIdx === 0 || isSubmittingRef.current || isQuestionMutationsLocked}
-              className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg disabled:opacity-30 cursor-pointer transition-all"
-            >
-              Previous
-            </button>
+            {!activeQuiz?.perQuestionTimer && (
+              <button
+                onClick={() => setCurrentQuestionIdx((p) => Math.max(0, p - 1))}
+                disabled={currentQuestionIdx === 0 || isSubmittingRef.current || isQuestionMutationsLocked}
+                className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg disabled:opacity-30 cursor-pointer transition-all"
+              >
+                Previous
+              </button>
+            )}
 
-            {currentQuestionIdx + 1 < quizQuestions.length && !hasSelectedOption && (
+            {currentQuestionIdx + 1 < quizQuestions.length && !hasSelectedOption && !activeQuiz?.perQuestionTimer && (
               <button
                 onClick={handleSkip}
                 disabled={isSubmittingRef.current || isQuestionMutationsLocked}
@@ -1466,16 +1541,16 @@ export const QuizHub: React.FC = () => {
               <button
                 onClick={() => setCurrentQuestionIdx((p) => p + 1)}
                 disabled={isSubmittingRef.current || isQuestionMutationsLocked}
-                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 disabled:opacity-30 cursor-pointer transition-all"
+                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 disabled:opacity-30 cursor-pointer transition-all ml-auto"
                 style={{ backgroundColor: isColorblind ? '#1d4ed8' : 'var(--primary)' }}
               >
                 Next Question
               </button>
-            ) : firstUnansweredIndex !== -1 ? (
+            ) : firstUnansweredIndex !== -1 && !activeQuiz?.perQuestionTimer ? (
               <button
                 onClick={() => setCurrentQuestionIdx(firstUnansweredIndex)}
                 disabled={isSubmittingRef.current || isQuestionMutationsLocked}
-                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 disabled:opacity-30 cursor-pointer transition-all"
+                className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 disabled:opacity-30 cursor-pointer transition-all ml-auto"
                 style={{ backgroundColor: isColorblind ? '#1d4ed8' : 'var(--primary)' }}
               >
                 Review Skipped Questions
@@ -1654,5 +1729,7 @@ export const QuizHub: React.FC = () => {
       )}
 
     </div>
+    </PwaGateway>
+
   );
 };

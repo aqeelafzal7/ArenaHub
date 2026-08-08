@@ -132,13 +132,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!user) throw new Error('No authenticated user found for onboarding.');
     const path = `users/${user.uid}`;
     
+    // If role is Organizer, check whitelist
+    if (role === 'Organizer') {
+      try {
+        const cnicDocRef = doc(db, 'whitelisted_cnics', cnic);
+        const cnicSnap = await getDoc(cnicDocRef);
+        if (!cnicSnap.exists()) {
+          throw new Error('Your CNIC is not authorized for an Organizer account. Contact Super Admin.');
+        }
+      } catch (err: any) {
+        if (err.message === 'Your CNIC is not authorized for an Organizer account. Contact Super Admin.') {
+          throw err;
+        }
+        console.error('Error checking whitelist:', err);
+        throw new Error('Could not verify CNIC. Please try again later.');
+      }
+    }
+
     // Structure User profile
     const newProfile: UserProfile = {
       uid: user.uid,
       email: user.email || '',
       name: name.trim() || user.displayName || 'No Name',
       cnic,
-      role,
+      role: role === 'Organizer' ? 'admin' : 'participant',
+      permissions: role === 'Organizer' ? ['create_room', 'manage_users'] : [],
       createdAt: new Date().toISOString() // String formatted or timestamp
     };
 

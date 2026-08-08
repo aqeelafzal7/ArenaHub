@@ -1,4 +1,13 @@
-export type UserRole = 'Organizer' | 'Participant';
+export type UserRole = 'super_admin' | 'admin' | 'participant' | 'Organizer' | 'Participant';
+
+export interface UserPermissions {
+  maxParticipants?: number;
+  maxQuestions?: number;
+  maxDurationMinutes?: number;
+  maxRooms?: number;
+  canUsePictureQuestions?: boolean;
+  canUseVideoProctoring?: boolean;
+}
 
 export interface UserProfile {
   uid: string;
@@ -6,6 +15,7 @@ export interface UserProfile {
   name: string;
   cnic: string;
   role: UserRole;
+  permissions?: string[] | UserPermissions | any;
   createdAt: any; // Firestore Timestamp
 }
 
@@ -17,6 +27,7 @@ export interface Hub {
   primaryColor: string;
   secondaryColor: string;
   createdAt: any;
+  questions?: Question[];
 }
 
 export interface Quiz {
@@ -33,6 +44,8 @@ export interface Quiz {
   openAt?: string;
   closeAt?: string;
   postSubmissionText?: string;
+  perQuestionTimer?: boolean;
+  timePerQuestionSeconds?: number;
 }
 
 export interface Question {
@@ -59,6 +72,7 @@ export interface Attempt {
   cheatFlags: string[];
   status: 'In Progress' | 'Submitted' | 'Locked Out';
   cameraStatus?: string;
+  hardware_bypass?: boolean;
   studentAnswers?: Record<string, any>;
   ipAddress?: string;
   deviceInfo?: string;

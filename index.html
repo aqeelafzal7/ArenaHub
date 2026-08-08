@@ -1,34 +1,34 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    
-    <!-- Branding & PWA Configuration -->
-    <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg" />
-    <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#0f172a" />
-    <meta name="description" content="ArenaHub - The official secure, proctored academic assessment portal for the National IQ Olympiad." />
-    <meta name="author" content="Muhammad Aqeel Afzal" />
-    
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    
-    <title>ArenaHub | Secure Quiz & Evaluation Platform</title>
-  </head>
-  <body class="bg-[#0f172a] text-white overflow-x-hidden">
-    <div id="root"></div>
-    
-    <!-- React Main Entry -->
-    <script type="module" src="/src/main.tsx"></script>
-    
-    <!-- PWA Service Worker Registration -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch(err => {
-            console.log('Service Worker registration failed: ', err);
-          });
-        });
-      }
-    </script>
-  </body>
-</html>
+      <meta charset="UTF-8" />
+          
+              <!-- Branding & PWA Configuration -->
+                  <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg" />
+                      <link rel="manifest" href="/manifest.json" />
+                          <meta name="theme-color" content="#0f172a" />
+                              <meta name="description" content="ArenaHub - The official secure, proctored academic assessment portal for the National IQ Olympiad." />
+                                  <meta name="author" content="Muhammad Aqeel Afzal" />
+                                      
+                                          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                                              
+                                                  <title>ArenaHub | Secure Quiz & Evaluation Platform</title>
+                                                    </head>
+                                                      <body class="bg-[#0f172a] text-white overflow-x-hidden">
+                                                          <div id="root"></div>
+                                                              
+                                                                  <!-- React Main Entry -->
+                                                                      <script type="module" src="/src/main.tsx"></script>
+                                                                          
+                                                                              <!-- PWA Service Worker Registration -->
+                                                                                  <script>
+                                                                                        if ('serviceWorker' in navigator) {
+                                                                                                window.addEventListener('load', () => {
+                                                                                                          navigator.serviceWorker.register('/sw.js').catch(err => {
+                                                                                                                      console.log('Service Worker registration failed: ', err);
+                                                                                                                                });
+                                                                                                                                        });
+                                                                                                                                              }
+                                                                                                                                                  </script>
+                                                                                                                                                    </body>
+                                                                                                                                                    </html>

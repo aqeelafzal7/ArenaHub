@@ -1,0 +1,1500 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useAuth } from "../context/AuthContext";
+import { SecureText } from "../components/SecureText";
+
+import { db, handleFirestoreError, OperationType } from "../lib/firebase";
+
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  query,
+  where,
+  arrayUnion,
+  serverTimestamp,
+  onSnapshot,
+} from "firebase/firestore";
+import { useProctoring } from "../hooks/useProctoring";
+import { Hub, Quiz, Question, Attempt } from "../types";
+import {
+  ShieldAlert,
+  Timer,
+  CheckCircle,
+  AlertOctagon,
+  ArrowRight,
+  Lock,
+  X,
+  CornerDownLeft,
+  BookOpen,
+  RefreshCw,
+} from "lucide-react";
+import { motion } from "motion/react";
+import * as tf from "@tensorflow/tfjs";
+import * as cocoSsd from "@tensorflow-models/coco-ssd";
+import * as blazeface from "@tensorflow-models/blazeface";
+
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+interface VideoPreviewProps {
+  srcStream: MediaStream;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+}
+
+const VideoPreview: React.FC<VideoPreviewProps> = ({ srcStream, videoRef }) => {
+  useEffect(() => {
+    if (videoRef.current && srcStream) {
+      videoRef.current.srcObject = srcStream;
+    }
+  }, [srcStream, videoRef]);
+
+  return (
+    <div className="fixed bottom-4 right-4 z-50 w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden border-2 border-brand-primary shadow-lg bg-black flex items-center justify-center relative">
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        className="w-full h-full object-cover scale-x-[-1]"
+      />
+      <div className="absolute inset-x-0 bottom-1 flex justify-center pointer-events-none">
+        <span className="text-[8px] sm:text-[9px] bg-emerald-950/80 border border-emerald-500/50 text-emerald-400 font-extrabold tracking-widest px-1.5 py-0.5 rounded uppercase animate-pulse shadow-md">
+          Scanning...
+        </span>
+      </div>
+    </div>
+  );
+};
+
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+const GAS_WEBHOOK_URL =
+  "https://script.google.com/macros/s/AKfycbzYw0GXrK2VPraB_fh3lT0gJr2EXF53I9HMKP0rkWN-rG_NTYfdXIzUfP-nwT9ftHoE/exec";
+
+const SUSPICIOUS_KEYWORDS = [
+  // English
+  "answer",
+  "question",
+  "search",
+  "google",
+  "chat gpt",
+  "tell me",
+  "what is",
+  "option",
+  // Roman Urdu / Hindi
+  "jawab",
+  "batao",
+  "madad",
+  "kya hai",
+  "sawal",
+  "dhundo",
+  "bhai",
+  "yaar",
+  // Roman Punjabi
+  "dasso",
+  "ki ae",
+  "kivein",
+  "bol",
+  // Urdu Script (In case the OS natively translates it)
+  "جواب",
+  "سوال",
+  "بتاؤ",
+  "مدد",
+  "کیا",
+];
+
+import { PwaGateway } from "../components/PwaGateway";
+
+export const QuizSession: React.FC = () => {
+  const { user, profile, theme, isQuizStarted, setIsQuizStarted } = useAuth();
+  const isColorblind = theme === "colorblind";
+
+  // Camera/Proctor stream states
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [cameraStatus, setCameraStatus] = useState<string>("Requesting...");
+  const streamRef = useRef<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const aiIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [aiWarning, setAiWarning] = useState<string | null>(null);
+
+  const setAndRefStream = (newStream: MediaStream | null) => {
+    setStream(newStream);
+    streamRef.current = newStream;
+  };
+
+  const captureAndUploadSnapshot = async (
+    filenameLabel: string,
+  ): Promise<string | null> => {
+    if (!videoRef.current || !canvasRef.current || !streamRef.current)
+      return null;
+
+    try {
+      const canvas = canvasRef.current;
+      const context = canvas.getContext("2d");
+      if (!context) return null;
+
+      // Draw current video stream frame onto hidden canvas
+      context.drawImage(videoRef.current, 0, 0, 640, 480);
+
+      // Convert to highly compressed, efficient JPEG text stream (0.6 quality)
+      const base64Image = canvas.toDataURL("image/jpeg", 0.6);
+      const filename = `${profile?.name || "Candidate"}_${filenameLabel}_${Date.now()}.jpg`;
+
+      // Post payload to our 5TB Google Drive bridge
+      const response = await fetch(GAS_WEBHOOK_URL, {
+        method: "POST",
+        mode: "cors",
+        headers: { "Content-Type": "text/plain" }, // Avoid CORS preflight validation issues
+        body: JSON.stringify({ image: base64Image, filename: filename }),
+      });
+
+      const result = await response.json();
+      return result.success ? result.url : null;
+    } catch (err) {
+      console.error("Forensic upload to Google Drive failed:", err);
+      return null;
+    }
+  };
+
+  // Search/Access States
+  const [hubIdInput, setHubIdInput] = useState("");
+  const [quizIdInput, setQuizIdInput] = useState("");
+
+  const [activeHub, setActiveHub] = useState<Hub | null>(null);
+  const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
+  const [quizQuestions, setQuizQuestions] = useState<Question[]>([]);
+
+  // Access Blocked States
+  const [isWhitelistBlocked, setIsWhitelistBlocked] = useState(false);
+  const [isAttemptsExhausted, setIsAttemptsExhausted] = useState(false);
+
+  // Taking States
+  const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
+  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
+  const [answers, setAnswers] = useState<{ [qId: string]: string }>({});
+
+  // Timer States
+  const [timeLeft, setTimeLeft] = useState(0); // in seconds
+  const [questionTimer, setQuestionTimer] = useState<number | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const questionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isSubmittingRef = useRef(false);
+  const strikeCount = useRef(0);
+  const cheatFlagsRef = useRef<string[]>([]);
+  const lastUploadTimeRef = useRef<number>(0);
+  const compulsoryShotsTakenRef = useRef(0);
+  const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<any>(null);
+  const isListeningRef = useRef(false);
+  const speechThrottleRef = useRef<number>(0);
+
+  // Proctoring Alert Modal States
+  const [warningModalOpen, setWarningModalOpen] = useState(false);
+  const [warningModalMessage, setWarningModalMessage] = useState("");
+  const [isQuestionMutationsLocked, setIsQuestionMutationsLocked] =
+    useState(false);
+
+  // Result States
+  const [finalAttempt, setFinalAttempt] = useState<Attempt | null>(null);
+
+  // Feedback/Loading States
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Legal-Grade Telemetry States
+  const [ipAddress, setIpAddress] = useState<string>("Fetching...");
+  const [deviceInfo, setDeviceInfo] = useState<string>("Unknown Device");
+  const [exactStartTime, setExactStartTime] = useState<string>("");
+
+  const handleSoftRefresh = () => {
+    const savedAnswers = localStorage.getItem("arena_saved_answers");
+    if (savedAnswers) {
+      setAnswers(JSON.parse(savedAnswers));
+    }
+  };
+
+  // Fetch Telemetry on Mount
+  useEffect(() => {
+    // Fetch IP address
+    fetch("https://api.ipify.org?format=json")
+      .then((r) => r.json())
+      .then((data) => setIpAddress(data.ip || "Unavailable"))
+      .catch(() => setIpAddress("Unavailable"));
+
+    // Determine OS and Device Type from navigator.userAgent
+    const ua = navigator.userAgent;
+    let os = "Unknown OS";
+    if (/Windows/i.test(ua)) os = "Windows";
+    else if (/Macintosh|Mac OS X/i.test(ua)) os = "macOS";
+    else if (/Linux/i.test(ua)) os = "Linux";
+    else if (/Android/i.test(ua)) os = "Android";
+    else if (/iPhone|iPad|iPod/i.test(ua)) os = "iOS";
+
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(ua);
+    const deviceType = isMobile ? "Mobile" : "Desktop";
+    setDeviceInfo(`${os} - ${deviceType}`);
+  }, []);
+
+  // Session Hydration on Mount / Auth state resolution
+  useEffect(() => {
+    const hydrateActiveSession = async () => {
+      if (!user) return;
+      const cached = localStorage.getItem("arena_active_session");
+      if (!cached) return;
+
+      try {
+        setLoading(true);
+        const session = JSON.parse(cached);
+        const { hubId, quizId, attemptId, startedAt } = session;
+
+        // Fetch attempt
+        const attemptDoc = await getDoc(doc(db, "attempts", attemptId));
+        if (!attemptDoc.exists()) {
+          // Stale cache
+          localStorage.removeItem("arena_active_session");
+          localStorage.removeItem("arena_saved_answers");
+          return;
+        }
+
+        const attemptData = attemptDoc.data() as Attempt;
+        if (attemptData.status !== "In Progress") {
+          // Already submitted or locked out
+          localStorage.removeItem("arena_active_session");
+          localStorage.removeItem("arena_saved_answers");
+          return;
+        }
+
+        // Fetch Hub and Quiz
+        const [hubDoc, quizDoc] = await Promise.all([
+          getDoc(doc(db, "hubs", hubId)),
+          getDoc(doc(db, "quizzes", quizId)),
+        ]);
+
+        if (!hubDoc.exists() || !quizDoc.exists()) {
+          return;
+        }
+
+        const hubData = hubDoc.data() as Hub;
+        const quizData = quizDoc.data() as Quiz;
+
+        // Fetch Questions pool from Hub document
+        let qList: Question[] = [];
+        const allQuestions = hubData.questions || [];
+        const filteredQuestions = allQuestions.filter(
+          (q) => q.quizId === quizId,
+        );
+
+        filteredQuestions.forEach((q) => {
+          const shuffledOptions = q.options ? shuffleArray(q.options) : [];
+          qList.push({
+            ...q,
+            options: shuffledOptions,
+            originalOptions: q.options,
+          });
+        });
+
+        qList = shuffleArray(qList);
+
+        // Restore States
+        setActiveHub(hubData);
+        setActiveQuiz(quizData);
+        setQuizQuestions(qList);
+        setActiveAttemptId(attemptId);
+        setExactStartTime(startedAt);
+
+        // Calculate exact remaining time
+        const elapsed = Math.floor(
+          (Date.now() - new Date(startedAt).getTime()) / 1000,
+        );
+        const remaining = Math.max(0, quizData.timeLimit * 60 - elapsed);
+        setTimeLeft(remaining);
+
+        // Restore saved answers
+        const savedAnswersStr = localStorage.getItem("arena_saved_answers");
+        if (savedAnswersStr) {
+          try {
+            setAnswers(JSON.parse(savedAnswersStr));
+          } catch (e) {
+            console.error("Error parsing saved answers:", e);
+          }
+        }
+
+        setIsQuizStarted(true);
+      } catch (err) {
+        console.error("Error hydrating active session:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    hydrateActiveSession();
+  }, [user]);
+
+  // 1. Fetch Hub branding and Questions
+  const [questions, setQuestions] = useState<Question[]>([]);
+
+  const handleLoadHub = async (e: React.FormEvent) => {};
+
+  // Helper to get quiz schedule
+  const getQuizSchedule = (quiz: Quiz) => {
+    const start = quiz.openAt || (quiz as any).startTime;
+    const end = quiz.closeAt || (quiz as any).endTime;
+    return { start, end };
+  };
+
+  // Helper to determine if current time is outside window
+  const isOutsideTimeWindow = (quiz: Quiz) => {
+    const { start, end } = getQuizSchedule(quiz);
+    const now = Date.now();
+    if (start) {
+      const startTime = new Date(start).getTime();
+      if (now < startTime) return "BEFORE";
+    }
+    if (end) {
+      const endTime = new Date(end).getTime();
+      if (now > endTime) return "AFTER";
+    }
+    return null; // within window
+  };
+
+  // 2. Fetch Quiz
+  const handleLoadQuiz = async (e: React.FormEvent) => {};
+
+  // 3. Start Proctored Quiz
+  const handleStartQuiz = async () => {};
+
+  // 3.5 Submit Quiz Handler (Stable Callback)
+  const handleSubmitQuiz = useCallback(
+    async (
+      reason: "Submitted" | "Timer Expired" | "Locked Out",
+      forceLockout = false,
+    ) => {
+      if (isSubmittingRef.current) return;
+      isSubmittingRef.current = true;
+
+      try {
+        if (!activeAttemptId || !activeQuiz || quizQuestions.length === 0) {
+          return;
+        }
+        setLoading(true);
+        setError(null);
+
+        // Clear timer
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+
+        // Compute raw score
+        let correctCount = 0;
+        quizQuestions.forEach((q) => {
+          const selected = answers[q.id];
+          const originalOptions = q.originalOptions || q.options;
+          const correctText = originalOptions[q.correctOption];
+          if (selected !== undefined && selected === correctText) {
+            correctCount++;
+          }
+        });
+
+        const finalScore = correctCount;
+        const finalPercentage = (correctCount / quizQuestions.length) * 100;
+        const isPassed = finalPercentage >= activeQuiz.passPercentage;
+
+        const finalStatus = forceLockout ? "Locked Out" : "Submitted";
+        const secondsConsumed = activeQuiz.timeLimit * 60 - timeLeft;
+
+        const attemptDocRef = doc(db, "attempts", activeAttemptId);
+        const currentFlags = [...cheatFlagsRef.current];
+        const finalAnswers = { ...answers };
+
+        const finalAttemptData: Attempt = {
+          id: activeAttemptId,
+          hubId: activeHub?.id || "",
+          quizId: activeQuiz.id,
+          userId: user?.uid || "",
+          userName: profile?.name || "",
+          userCnic: profile?.cnic || "",
+          userEmail: user?.email || "",
+          score: finalScore,
+          timeSpentSeconds: secondsConsumed,
+          passed: isPassed,
+          cheatFlags: currentFlags,
+          status: finalStatus,
+          studentAnswers: finalAnswers,
+          ipAddress: ipAddress,
+          deviceInfo: deviceInfo,
+          startedAt: exactStartTime,
+          submittedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Write final attempt evaluation
+        await updateDoc(attemptDocRef, {
+          score: finalScore,
+          timeSpentSeconds: secondsConsumed,
+          passed: isPassed,
+          status: finalStatus,
+          studentAnswers: finalAnswers,
+          ipAddress: ipAddress,
+          deviceInfo: deviceInfo,
+          startedAt: exactStartTime,
+          submittedAt: new Date().toISOString(),
+          updatedAt: serverTimestamp(),
+        });
+
+        localStorage.removeItem("arena_active_session");
+        localStorage.removeItem("arena_saved_answers");
+
+        setFinalAttempt(finalAttemptData);
+        setIsQuizStarted(false);
+        setActiveAttemptId(null);
+
+        // Stop camera stream on successful submission
+        if (streamRef.current) {
+          try {
+            streamRef.current.getTracks().forEach((track) => track.stop());
+          } catch (e) {
+            console.error("Error stopping stream tracks on submit:", e);
+          }
+          setAndRefStream(null);
+        }
+      } catch (err: any) {
+        console.error("Quiz submission error:", err);
+        setError(err.message || "Submission evaluation failed.");
+      } finally {
+        isSubmittingRef.current = false;
+        setLoading(false);
+      }
+    },
+    [
+      activeAttemptId,
+      activeQuiz,
+      quizQuestions,
+      answers,
+      timeLeft,
+      activeHub,
+      user,
+      profile,
+      ipAddress,
+      deviceInfo,
+      exactStartTime,
+    ],
+  );
+
+  // Camera & stream lifecycle hooks
+  useEffect(() => {
+    const isAtInstructions =
+      activeHub && activeQuiz && !isQuizStarted && !finalAttempt;
+    const isTaking = activeHub && activeQuiz && isQuizStarted && !finalAttempt;
+
+    // FIX: Request camera if at instructions OR if taking the quiz (e.g., after a page refresh)
+    if ((isAtInstructions || isTaking) && !streamRef.current) {
+      const requestCamera = async () => {
+        try {
+          setCameraStatus("Requesting...");
+          const mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+          });
+
+          let options: any = { mimeType: "video/webm;codecs=vp9,opus" };
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options = { mimeType: "video/webm;codecs=vp8,opus" }; // Fallback
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+              options = { mimeType: "video/mp4" }; // Safari fallback
+              if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                options = { mimeType: "" }; // Let browser decide
+              }
+            }
+          }
+          const mediaRecorder = new MediaRecorder(mediaStream, options);
+          mediaRecorderRef.current = mediaRecorder;
+          mediaRecorder.start();
+
+          setAndRefStream(mediaStream);
+          setCameraStatus("Active");
+        } catch (err: any) {
+          console.warn("Camera access error:", err);
+          if (
+            err.name === "NotFoundError" ||
+            err.name === "DevicesNotFoundError"
+          ) {
+            setCameraStatus("No Hardware");
+          } else if (
+            err.name === "NotAllowedError" ||
+            err.name === "PermissionDeniedError"
+          ) {
+            setCameraStatus("Permission Denied");
+          } else {
+            setCameraStatus("Permission Denied");
+          }
+        }
+      };
+      requestCamera();
+    }
+
+    // Stop streams if we cancel or leave the instructions/taking views
+    if (!isAtInstructions && !isTaking && streamRef.current) {
+      try {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      } catch (e) {
+        console.error("Error stopping tracks:", e);
+      }
+      setAndRefStream(null);
+    }
+  }, [activeHub, activeQuiz, isQuizStarted, finalAttempt]);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        try {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+        } catch (e) {
+          console.error("Error stopping tracks on unmount:", e);
+        }
+      }
+    };
+  }, []);
+
+  // 4.1 AI Vision Proctoring Detection Loop (Warning-Only)
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId) return;
+
+    let isCancelled = false;
+    let cocoModel: any = null;
+    let faceModel: any = null;
+
+    const loadModelsAndStartLoop = async () => {
+      try {
+        console.log("Initializing AI Vision Proctoring models...");
+        await tf.ready();
+        const [loadedCoco, loadedFace] = await Promise.all([
+          cocoSsd.load(),
+          blazeface.load(),
+        ]);
+
+        if (isCancelled) return;
+        cocoModel = loadedCoco;
+        faceModel = loadedFace;
+        console.log("AI models loaded successfully!");
+
+        const interval = setInterval(async () => {
+          if (
+            isCancelled ||
+            !videoRef.current ||
+            videoRef.current.readyState < 2
+          )
+            return;
+          try {
+            const videoEl = videoRef.current;
+
+            // 1. Detect cell phones (coco-ssd)
+            const predictions = await cocoModel.detect(videoEl);
+            const hasPhone = predictions.some(
+              (pred: any) => pred.class === "cell phone",
+            );
+
+            // 2. Detect multiple faces (blazeface)
+            const faces = await faceModel.estimateFaces(videoEl, false);
+            // Increase Confidence: Set the face detection model's minimum confidence score threshold to 0.85
+            const highConfidenceFaces = faces.filter((f: any) => {
+              const prob = Array.isArray(f.probability)
+                ? f.probability[0]
+                : f.probability;
+              return prob > 0.85;
+            });
+
+            let isViolation = false;
+            let violationType = "";
+
+            if (hasPhone) {
+              isViolation = true;
+              violationType = "Cell Phone Detected";
+            } else if (highConfidenceFaces.length > 1) {
+              isViolation = true;
+              violationType = "Multiple People Detected";
+            } else if (highConfidenceFaces.length === 0) {
+              isViolation = true;
+              violationType = "No Face Detected";
+            }
+
+            if (isViolation) {
+              strikeCount.current += 1;
+              console.log(
+                `AI Detected: ${violationType} (Strike ${strikeCount.current})`,
+              );
+
+              if (strikeCount.current >= 3) {
+                setAiWarning(
+                  `Warning: ${violationType}. Please ensure your face is visible and no phones are in view.`,
+                );
+                const now = Date.now();
+                if (now - lastUploadTimeRef.current > 45000) {
+                  // 45-second throttling lock
+                  lastUploadTimeRef.current = now;
+
+                  await updateDoc(doc(db, "attempts", activeAttemptId), {
+                    cheatFlags: arrayUnion(`AI Flag: ${violationType}`),
+                  });
+
+                  // Capture image asynchronously
+                  captureAndUploadSnapshot(
+                    violationType.replace(/ /g, "_"),
+                  ).then(async (driveUrl) => {
+                    if (driveUrl) {
+                      const logMsg = `AI Flag: ${violationType} [Proof Link: ${driveUrl}]`;
+
+                      // Update firestore attempt log dynamically
+                      await updateDoc(doc(db, "attempts", activeAttemptId), {
+                        cheatFlags: arrayUnion(logMsg),
+                        updatedAt: serverTimestamp(),
+                      });
+                    }
+                  });
+                }
+              }
+            } else {
+              strikeCount.current = 0;
+              setAiWarning("");
+            }
+          } catch (err) {
+            console.error("AI Frame detection evaluation error:", err);
+          }
+        }, 2000);
+
+        aiIntervalRef.current = interval;
+        if (isCancelled) {
+          clearInterval(interval);
+          aiIntervalRef.current = null;
+        }
+      } catch (err) {
+        console.error("Failed to load TFJS proctoring models:", err);
+      }
+    };
+
+    loadModelsAndStartLoop();
+
+    return () => {
+      isCancelled = true;
+      if (aiIntervalRef.current) {
+        clearInterval(aiIntervalRef.current);
+        aiIntervalRef.current = null;
+      }
+    };
+  }, [isQuizStarted, activeAttemptId]);
+
+  // Toast Auto-Dismiss
+  useEffect(() => {
+    if (aiWarning) {
+      const timer = setTimeout(() => {
+        setAiWarning(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [aiWarning]);
+
+  // Compulsory Verification Snapshots (5 shots spaced evenly)
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId || !activeQuiz) {
+      compulsoryShotsTakenRef.current = 0;
+      return;
+    }
+
+    const intervalMs = (activeQuiz.timeLimit * 60 * 1000) / 6;
+
+    const snapshotInterval = setInterval(() => {
+      if (compulsoryShotsTakenRef.current >= 5) {
+        clearInterval(snapshotInterval);
+        return;
+      }
+
+      compulsoryShotsTakenRef.current += 1;
+      const currentShotNumber = compulsoryShotsTakenRef.current;
+
+      captureAndUploadSnapshot(
+        `Compulsory_Verification_V${currentShotNumber}`,
+      ).then(async (driveUrl) => {
+        if (driveUrl) {
+          await updateDoc(doc(db, "attempts", activeAttemptId), {
+            marketingImages: arrayUnion(driveUrl),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      });
+    }, intervalMs);
+
+    return () => clearInterval(snapshotInterval);
+  }, [isQuizStarted, activeAttemptId, activeQuiz]);
+
+  // Advanced AI Speech Proctoring Engine
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId) return;
+
+    // Cross-browser support (Chrome, Safari, Edge, Android, iOS)
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn("[ERROR] AI Speech not supported on this browser.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true; // Keep listening after they stop speaking
+    // false means it waits for you to finish your sentence before evaluating
+    recognition.interimResults = false;
+    // Optimize for regional accents (Pakistani English/Urdu mix)
+    recognition.lang = "en-PK";
+
+    recognitionRef.current = recognition;
+
+    // Auto-restart if it stops due to silence
+    recognition.onend = () => {
+      if (isQuizStarted && isListeningRef.current) {
+        try {
+          recognition.start();
+        } catch (e) {}
+      }
+    };
+
+    // Advanced contextual speech evaluation
+    recognition.onresult = async (event: any) => {
+      const currentTranscript = event.results[
+        event.results.length - 1
+      ][0].transcript
+        .toLowerCase()
+        .trim();
+      console.log("AI Acoustic Intercept:", currentTranscript);
+
+      const now = Date.now();
+      if (now - speechThrottleRef.current < 30000) return; // 30-second throttle
+
+      let flagReason = "";
+      const wordCount = currentTranscript.split(/\s+/).length;
+
+      // Tier 1: Check against Multi-Lingual Blacklist
+      const foundKeyword = SUSPICIOUS_KEYWORDS.find((word) =>
+        currentTranscript.includes(word),
+      );
+      if (foundKeyword) {
+        flagReason = `Suspicious Keyword Spoken (${foundKeyword})`;
+      }
+      // Tier 2: Dynamic Question Context Check
+      else if (quizQuestions[currentQuestionIdx]) {
+        const questionWords = quizQuestions[currentQuestionIdx].text
+          .toLowerCase()
+          .split(" ")
+          .filter((w: string) => w.length > 4);
+        const matchedContext = questionWords.find((word: string) =>
+          currentTranscript.includes(word),
+        );
+        if (matchedContext)
+          flagReason = `Spoke Exam Question Text (${matchedContext})`;
+      }
+      // Tier 3: The "Babble" Check (Catching unknown dialects by length)
+      if (!flagReason && wordCount >= 5) {
+        flagReason = `Sustained Conversational Talking Detected`;
+      }
+
+      // If any tier is triggered, log it and snap a photo
+      if (flagReason) {
+        speechThrottleRef.current = now;
+
+        const driveUrl = await captureAndUploadSnapshot("Audio_Violation");
+        const logMsg = `AI Flag: ${flagReason}. Transcript: "${currentTranscript}" ${driveUrl ? `[Proof Link: ${driveUrl}]` : ""}`;
+
+        if (activeAttemptId) {
+          await updateDoc(doc(db, "attempts", activeAttemptId), {
+            cheatFlags: arrayUnion(logMsg),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+    };
+
+    // BUG FIX: Automatically start the engine the moment it is created!
+    isListeningRef.current = true;
+    try {
+      recognition.start();
+      console.log("AI Speech Engine Started Successfully");
+    } catch (err) {
+      console.error("Failed to start speech engine:", err);
+    }
+
+    return () => {
+      isListeningRef.current = false;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {}
+      }
+    };
+  }, [isQuizStarted, activeAttemptId, quizQuestions, currentQuestionIdx]);
+
+  // 4. Timer effect & Scheduled window breach check
+  useEffect(() => {
+    if (!isQuizStarted || !exactStartTime || !activeQuiz) return;
+
+    timerRef.current = setInterval(() => {
+      // Strict Expiration Enforcement
+      const closeTime = activeQuiz.closeAt || (activeQuiz as any).endTime;
+      if (closeTime) {
+        const deadlineMs = new Date(closeTime).getTime();
+        if (Date.now() >= deadlineMs) {
+          if (timerRef.current) clearInterval(timerRef.current);
+          setWarningModalMessage(
+            "SESSION EXPIRED: The official closing time for this exam has been reached.",
+          );
+          setWarningModalOpen(true);
+          handleSubmitQuiz("Timer Expired", true);
+          return;
+        }
+      }
+
+      // Absolute Time Calculation
+      const startMs = new Date(exactStartTime).getTime();
+      const elapsedSeconds = Math.floor((Date.now() - startMs) / 1000);
+      const totalAllowedSeconds = activeQuiz.timeLimit * 60;
+      const remaining = Math.max(0, totalAllowedSeconds - elapsedSeconds);
+      setTimeLeft(remaining);
+
+      // Standard Timeout
+      if (remaining <= 0) {
+        if (timerRef.current) clearInterval(timerRef.current);
+        handleSubmitQuiz("Timer Expired", true);
+      }
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isQuizStarted, exactStartTime, activeQuiz, handleSubmitQuiz]);
+
+  // 4.1 Time Starvation / Per-Question Timer Logic
+  useEffect(() => {
+    if (
+      !isQuizStarted ||
+      !activeQuiz?.perQuestionTimer ||
+      !activeQuiz?.timePerQuestionSeconds
+    ) {
+      setQuestionTimer(null);
+      return;
+    }
+    setQuestionTimer(activeQuiz.timePerQuestionSeconds);
+  }, [isQuizStarted, activeQuiz, currentQuestionIdx]);
+
+  useEffect(() => {
+    if (questionTimer === null || !isQuizStarted || isQuestionMutationsLocked)
+      return;
+
+    if (questionTimer <= 0) {
+      if (questionTimerRef.current) clearInterval(questionTimerRef.current);
+
+      // Auto-submit current answer (or lack thereof) and move to next question
+      if (currentQuestionIdx < quizQuestions.length - 1) {
+        setCurrentQuestionIdx((p) => p + 1);
+      } else {
+        handleSubmitQuiz("Submitted");
+      }
+      return;
+    }
+
+    questionTimerRef.current = setInterval(() => {
+      setQuestionTimer((prev) => (prev !== null ? prev - 1 : null));
+    }, 1000);
+
+    return () => {
+      if (questionTimerRef.current) clearInterval(questionTimerRef.current);
+    };
+  }, [
+    questionTimer,
+    isQuizStarted,
+    isQuestionMutationsLocked,
+    currentQuestionIdx,
+    quizQuestions.length,
+    handleSubmitQuiz,
+  ]);
+
+  // 4.5 Listen for Admin Remote Override (forceLocked)
+  useEffect(() => {
+    if (!activeAttemptId || !isQuizStarted) return;
+
+    const unsubscribe = onSnapshot(
+      doc(db, "attempts", activeAttemptId),
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          if (data && data.forceLocked === true) {
+            setIsQuestionMutationsLocked(true);
+            setWarningModalMessage(
+              "SESSION OVERRIDE: This quiz session has been manually terminated by an administrator.",
+            );
+            setWarningModalOpen(true);
+
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
+            }
+
+            submitQuiz("Manually Terminated by Administrator");
+          }
+        }
+      },
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [activeAttemptId, isQuizStarted]);
+
+  // 5. Proctoring Logger Callbacks
+  const logCheatFlag = async (flag: string) => {
+    if (isSubmittingRef.current) return;
+    cheatFlagsRef.current.push(flag);
+    if (!activeAttemptId) return;
+    const path = `attempts/${activeAttemptId}`;
+    try {
+      await updateDoc(doc(db, "attempts", activeAttemptId), {
+        cheatFlags: arrayUnion(flag),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("Failed to log proctoring alert to Firestore:", err);
+    }
+  };
+
+  const handleProctoringAutoSubmit = async (reason: string) => {
+    if (isSubmittingRef.current) return;
+    setIsQuestionMutationsLocked(true);
+    setWarningModalMessage(
+      `PROCTORING LOCKOUT: ${reason}. Your quiz has been auto-submitted due to a security violation.`,
+    );
+    setWarningModalOpen(true);
+    await handleSubmitQuiz("Locked Out", true);
+  };
+
+  // Mount strict proctoring hook
+  useProctoring({
+    active: isQuizStarted,
+    onCheatFlag: logCheatFlag,
+    onAutoSubmit: handleProctoringAutoSubmit,
+    onShowWarningModal: (msg) => {
+      if (isSubmittingRef.current) return;
+      setWarningModalMessage(msg);
+      setWarningModalOpen(true);
+    },
+    isSubmittingRef: isSubmittingRef,
+  });
+
+  // Dismiss Warning Modal
+  const handleDismissWarning = () => {
+    setWarningModalOpen(false);
+  };
+
+  // 6. Submit Quiz Handler (moved above);
+
+  const submitQuiz = useCallback(
+    async (isAutoSubmit = false, reason = "") => {
+      if (isSubmittingRef.current) return;
+      isSubmittingRef.current = true;
+      try {
+        await handleSubmitQuiz("Locked Out", true);
+      } catch (err) {
+        isSubmittingRef.current = false;
+        throw err;
+      }
+    },
+    [handleSubmitQuiz],
+  );
+
+  const handleSkip = () => {
+    if (currentQuestionIdx + 1 < quizQuestions.length) {
+      setCurrentQuestionIdx((prev) => prev + 1);
+    }
+  };
+
+  // 7. Dynamic Style Variables for Tenant branding
+  const tenantColors = {
+    "--primary": activeHub ? activeHub.primaryColor : "#2563eb",
+    "--secondary": activeHub ? activeHub.secondaryColor : "#4f46e5",
+    "--accent": activeHub ? activeHub.secondaryColor : "#ea580c",
+  } as React.CSSProperties;
+
+  const timeLock = activeQuiz ? isOutsideTimeWindow(activeQuiz) : null;
+  const schedule = activeQuiz ? getQuizSchedule(activeQuiz) : null;
+
+  const firstUnansweredIndex = quizQuestions.findIndex(
+    (q) => answers[q.id] === undefined,
+  );
+  const currentQuestionId = quizQuestions[currentQuestionIdx]?.id;
+  const hasSelectedOption = currentQuestionId
+    ? answers[currentQuestionId] !== undefined
+    : false;
+
+  return (
+    <PwaGateway>
+      <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
+        <canvas ref={canvasRef} className="hidden" width={640} height={480} />
+
+        {isQuizStarted && activeQuiz && quizQuestions.length > 0 && (
+          <div className="space-y-6">
+            {/* Floating Proctored Header */}
+            <div className="bg-brand-card border border-brand-border rounded-2xl p-5 shadow-sm flex items-center justify-between gap-4 sticky top-4 z-50 transition-all">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`p-2 rounded-lg animate-pulse flex items-center justify-center ${
+                    isColorblind
+                      ? "bg-blue-100 text-blue-700"
+                      : "bg-red-100 text-red-600"
+                  }`}
+                >
+                  <ShieldAlert className="h-5 w-5" />
+                </div>
+                <div>
+                  <span className="text-2xs text-brand-muted font-bold uppercase tracking-widest block">
+                    {isColorblind ? "[SECURE MONITORING]" : "Proctored Session"}
+                  </span>
+                  <span className="text-sm font-black text-brand-text truncate max-w-[200px] md:max-w-xs block">
+                    {activeQuiz.title}
+                  </span>
+                </div>
+              </div>
+
+              {/* Timer & Refresh widget */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSoftRefresh}
+                  title="Soft Refresh Room"
+                  className="p-2 rounded-xl border border-brand-border bg-brand-bg hover:bg-brand-primary/10 transition-colors cursor-pointer group"
+                >
+                  <RefreshCw className="h-5 w-5 text-brand-muted group-hover:text-brand-primary transition-colors" />
+                </button>
+
+                {activeQuiz.perQuestionTimer && questionTimer !== null && (
+                  <div
+                    className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs ${
+                      questionTimer <= 5
+                        ? "animate-pulse bg-red-100 border border-red-400 text-red-900"
+                        : "bg-brand-bg border border-brand-border text-brand-text"
+                    }`}
+                  >
+                    <Timer className="h-5 w-5" />
+                    Q-Time: 00:
+                    {questionTimer < 10 ? `0${questionTimer}` : questionTimer}
+                  </div>
+                )}
+
+                <div
+                  className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs animate-bounce ${
+                    isColorblind
+                      ? "bg-blue-100 border border-blue-300 text-blue-900"
+                      : "bg-red-50 border border-red-200 text-red-800"
+                  }`}
+                >
+                  <Timer className="h-5 w-5" />
+                  {Math.floor(timeLeft / 60)}:{timeLeft % 60 < 10 ? "0" : ""}
+                  {timeLeft % 60}
+                </div>
+              </div>
+            </div>
+
+            {/* Progress indicators */}
+            <div className="bg-brand-card border border-brand-border rounded-2xl p-6 shadow-xs">
+              <div className="flex justify-between text-xs text-brand-muted font-bold uppercase tracking-wider mb-2">
+                <span>
+                  Question {currentQuestionIdx + 1} of {quizQuestions.length}
+                </span>
+                <span>
+                  Progress:{" "}
+                  {Math.round(
+                    (currentQuestionIdx / quizQuestions.length) * 100,
+                  )}
+                  %
+                </span>
+              </div>
+
+              <div className="w-full h-2 bg-brand-bg rounded-full overflow-hidden border border-brand-border">
+                <div
+                  className="h-full transition-all duration-300"
+                  style={{
+                    backgroundColor: isColorblind
+                      ? "#1d4ed8"
+                      : "var(--primary)",
+                    width: `${((currentQuestionIdx + 1) / quizQuestions.length) * 100}%`,
+                  }}
+                ></div>
+              </div>
+            </div>
+            {/* Question Card */}
+            <div className="bg-brand-card border border-brand-border rounded-2xl p-8 shadow-xs relative overflow-hidden bg-[repeating-linear-gradient(45deg,transparent,transparent_2px,rgba(0,0,0,0.03)_2px,rgba(0,0,0,0.03)_4px)] dark:bg-[repeating-linear-gradient(45deg,transparent,transparent_2px,rgba(255,255,255,0.02)_2px,rgba(255,255,255,0.02)_4px)]">
+              <h3 className="text-lg font-extrabold text-brand-text mb-6">
+                <SecureText>
+                  {quizQuestions[currentQuestionIdx].text}
+                </SecureText>
+              </h3>
+              {quizQuestions[currentQuestionIdx].imageUrl && (
+                <img
+                  src={quizQuestions[currentQuestionIdx].imageUrl}
+                  alt="Question Graphic"
+                  className="max-w-full h-auto mb-4 rounded-md"
+                />
+              )}
+
+              {/* Answer Options */}
+              <div className="space-y-3.5 relative z-10">
+                {quizQuestions[currentQuestionIdx].options.map(
+                  (option, idx) => {
+                    const qId = quizQuestions[currentQuestionIdx].id;
+                    const isSelected = answers[qId] === option;
+
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => {
+                          if (isQuestionMutationsLocked) return;
+                          setAnswers((prev) => {
+                            const updated = { ...prev, [qId]: option };
+                            localStorage.setItem(
+                              "arena_saved_answers",
+                              JSON.stringify(updated),
+                            );
+                            return updated;
+                          });
+                        }}
+                        className={`border-2 rounded-xl p-4 cursor-pointer transition-all flex items-center justify-between ${
+                          isSelected
+                            ? isColorblind
+                              ? "border-blue-700 bg-blue-50/20 text-blue-900 shadow-sm"
+                              : "border-brand-primary bg-brand-primary/5 shadow-xs"
+                            : "border-brand-border hover:border-brand-primary/50 hover:bg-brand-bg/50 bg-brand-bg/80"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`w-6 h-6 rounded-full border flex items-center justify-center font-bold text-xs ${
+                              isSelected
+                                ? isColorblind
+                                  ? "bg-blue-700 text-white border-blue-700"
+                                  : "bg-brand-primary text-white border-brand-primary"
+                                : "bg-brand-bg border-brand-border text-brand-muted"
+                            }`}
+                          >
+                            {String.fromCharCode(65 + idx)}
+                          </span>
+                          <span className="text-sm font-semibold text-brand-text">
+                            <SecureText>{option}</SecureText>
+                          </span>
+                        </div>
+                        {isSelected &&
+                          (isColorblind ? (
+                            <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">
+                              [SELECTED]
+                            </span>
+                          ) : (
+                            <CheckCircle className="h-5 w-5 text-brand-primary" />
+                          ))}
+                      </div>
+                    );
+                  },
+                )}
+              </div>
+            </div>
+
+            {/* Navigation controller */}
+            <div className="flex justify-between items-center gap-4">
+              {!activeQuiz?.perQuestionTimer && (
+                <button
+                  onClick={() =>
+                    setCurrentQuestionIdx((p) => Math.max(0, p - 1))
+                  }
+                  disabled={
+                    currentQuestionIdx === 0 ||
+                    isSubmittingRef.current ||
+                    isQuestionMutationsLocked
+                  }
+                  className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg disabled:opacity-30 cursor-pointer transition-all"
+                >
+                  Previous
+                </button>
+              )}
+
+              {currentQuestionIdx + 1 < quizQuestions.length &&
+                !hasSelectedOption &&
+                !activeQuiz?.perQuestionTimer && (
+                  <button
+                    onClick={handleSkip}
+                    disabled={
+                      isSubmittingRef.current || isQuestionMutationsLocked
+                    }
+                    className="px-5 py-2.5 rounded-lg border border-brand-border text-brand-muted hover:text-brand-text font-bold text-sm bg-brand-card hover:bg-brand-bg disabled:opacity-30 cursor-pointer transition-all"
+                  >
+                    Skip for Now
+                  </button>
+                )}
+
+              {currentQuestionIdx < quizQuestions.length - 1 ? (
+                <button
+                  onClick={() => setCurrentQuestionIdx((p) => p + 1)}
+                  disabled={
+                    isSubmittingRef.current || isQuestionMutationsLocked
+                  }
+                  className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 disabled:opacity-30 cursor-pointer transition-all ml-auto"
+                  style={{
+                    backgroundColor: isColorblind
+                      ? "#1d4ed8"
+                      : "var(--primary)",
+                  }}
+                >
+                  Next Question
+                </button>
+              ) : firstUnansweredIndex !== -1 &&
+                !activeQuiz?.perQuestionTimer ? (
+                <button
+                  onClick={() => setCurrentQuestionIdx(firstUnansweredIndex)}
+                  disabled={
+                    isSubmittingRef.current || isQuestionMutationsLocked
+                  }
+                  className="px-6 py-2.5 rounded-lg text-white font-bold text-sm hover:bg-opacity-95 disabled:opacity-30 cursor-pointer transition-all ml-auto"
+                  style={{
+                    backgroundColor: isColorblind
+                      ? "#1d4ed8"
+                      : "var(--primary)",
+                  }}
+                >
+                  Review Skipped Questions
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Are you ready to submit your exam answers?",
+                      )
+                    ) {
+                      handleSubmitQuiz("Submitted");
+                    }
+                  }}
+                  disabled={
+                    loading ||
+                    isSubmittingRef.current ||
+                    isQuestionMutationsLocked
+                  }
+                  className="px-8 py-2.5 rounded-lg text-white font-extrabold text-sm hover:bg-opacity-95 shadow-xs disabled:opacity-30 cursor-pointer transition-all"
+                  style={{
+                    backgroundColor: isColorblind ? "#ea580c" : "var(--accent)",
+                  }}
+                  id="submit-quiz-btn"
+                >
+                  {loading ? "Submitting Answers..." : "Submit Quiz"}
+                </button>
+              )}
+            </div>
+
+            {stream && <VideoPreview srcStream={stream} videoRef={videoRef} />}
+            {aiWarning && (
+              <div className="fixed top-24 left-1/2 transform -translate-x-1/2 z-55 bg-red-600 border border-red-500 text-white font-extrabold px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 animate-bounce">
+                <ShieldAlert className="h-5 w-5 animate-pulse" />
+                <span className="text-sm">{aiWarning}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 5. SECURE Digital Scores Room */}
+        {finalAttempt && activeHub && activeQuiz && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="space-y-8"
+          >
+            <div className="bg-brand-card border border-brand-border rounded-2xl p-8 shadow-lg max-w-2xl mx-auto">
+              {/* Success Header */}
+              <div className="text-center mb-8">
+                <div
+                  className={`inline-flex items-center justify-center p-4 rounded-full border mb-4 ${
+                    isColorblind
+                      ? "bg-blue-50 border-blue-200 text-blue-700"
+                      : "bg-brand-bg border-brand-border"
+                  }`}
+                >
+                  <CheckCircle className="h-12 w-12 text-brand-primary" />
+                </div>
+                <h2 className="text-2xl font-black text-brand-text">
+                  Quiz Attempt Completed
+                </h2>
+                <p className="text-sm text-brand-muted mt-1">
+                  Evaluation submitted for {activeQuiz.title}
+                </p>
+              </div>
+
+              {/* Custom Admin Announcement Text */}
+              <div className="border border-brand-border rounded-xl p-6 bg-brand-bg/50 mb-8 text-center">
+                <p className="text-sm text-brand-text leading-relaxed whitespace-pre-line">
+                  {activeQuiz.postSubmissionText &&
+                  activeQuiz.postSubmissionText.trim() !== ""
+                    ? activeQuiz.postSubmissionText
+                    : "Your quiz has been submitted successfully. Results will be announced very soon."}
+                </p>
+              </div>
+
+              {/* SECURE SUBMISSION REPORT & ARCHIVE STAMP */}
+              <div className="border border-brand-border rounded-xl p-6 text-center bg-brand-bg">
+                <h3 className="text-sm font-bold mb-3 text-brand-text flex items-center justify-center gap-1.5">
+                  Assessment Verified & Saved Successfully
+                </h3>
+                <p className="text-xs text-brand-muted mb-4">
+                  Your examination has been verified under strict proctoring
+                  guidelines. The record has been permanently archived in the
+                  organization database.
+                </p>
+
+                <div className="bg-brand-card rounded-lg p-4 text-left text-xs font-mono space-y-1.5 border border-brand-border">
+                  <div>
+                    <span className="text-brand-muted font-bold uppercase">
+                      Candidate:
+                    </span>{" "}
+                    {finalAttempt.userName}
+                  </div>
+                  <div>
+                    <span className="text-brand-muted font-bold uppercase">
+                      CNIC Number:
+                    </span>{" "}
+                    {finalAttempt.userCnic}
+                  </div>
+                  <div>
+                    <span className="text-brand-muted font-bold uppercase">
+                      Email ID:
+                    </span>{" "}
+                    {finalAttempt.userEmail}
+                  </div>
+                  <div>
+                    <span className="text-brand-muted font-bold uppercase">
+                      Attempt Signature:
+                    </span>{" "}
+                    {finalAttempt.id}
+                  </div>
+                  <div>
+                    <span className="text-brand-muted font-bold uppercase">
+                      Archived Stamp:
+                    </span>{" "}
+                    {new Date(finalAttempt.updatedAt).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions controllers */}
+            <div className="flex gap-4 justify-center">
+              <button
+                onClick={() => {
+                  setFinalAttempt(null);
+                  setActiveQuiz(null);
+                  setActiveHub(null);
+                  setQuizIdInput("");
+                  setHubIdInput("");
+                }}
+                className="bg-brand-card border border-brand-border text-brand-text px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-brand-bg transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                Exit Arena
+              </button>
+            </div>
+          </motion.div>
+        )}
+
+        {/* 6. STRICT PROCTORING OPERATIONAL WARNING / LOCKOUT MODAL */}
+        {warningModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className={`max-w-md w-full border-2 rounded-2xl p-6 shadow-2xl text-center ${
+                isColorblind
+                  ? "bg-slate-900 border-orange-500 text-orange-100"
+                  : "bg-brand-card border-red-500 text-brand-text"
+              }`}
+            >
+              <div className="flex justify-center mb-4 text-red-500">
+                <ShieldAlert className="h-14 w-14 animate-bounce" />
+              </div>
+
+              <h3 className="text-xl font-black uppercase tracking-wider mb-2">
+                {isColorblind
+                  ? "[PROCTOR EXCEPTION WARNING]"
+                  : "Proctoring Security Alert"}
+              </h3>
+
+              <p className="text-sm leading-relaxed mb-6">
+                {warningModalMessage}
+              </p>
+
+              {isQuestionMutationsLocked ? (
+                <div className="space-y-4">
+                  <p className="text-xs font-mono text-red-400 bg-red-950/30 p-2.5 rounded border border-red-900">
+                    SESSION SUSPENDED - SCORE AUTO-SUBMITTED
+                  </p>
+                  <button
+                    onClick={() => {
+                      setWarningModalOpen(false);
+                      setFinalAttempt(null);
+                      setActiveQuiz(null);
+                      setActiveHub(null);
+                      setQuizIdInput("");
+                      setHubIdInput("");
+                    }}
+                    className="w-full bg-red-600 text-white font-bold py-2.5 rounded-lg text-sm hover:bg-red-700 transition-colors"
+                  >
+                    Exit Exam Portal
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleDismissWarning}
+                  className={`w-full font-extrabold py-2.5 rounded-lg text-sm transition-all cursor-pointer ${
+                    isColorblind
+                      ? "bg-blue-600 hover:bg-blue-700 text-white"
+                      : "bg-brand-primary text-white hover:bg-opacity-90"
+                  }`}
+                >
+                  Acknowledge & Resume
+                </button>
+              )}
+            </motion.div>
+          </div>
+        )}
+
+        {isQuizStarted && (
+          <div className="fixed bottom-6 left-6 z-50 bg-slate-900/90 border border-red-500/30 backdrop-blur-md px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-3">
+            <div className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-red-600"></span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[9px] font-black tracking-widest text-red-500 uppercase">
+                Acoustic AI
+              </span>
+              <span className="text-[11px] font-bold text-slate-300">
+                Monitoring Active
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </PwaGateway>
+  );
+};
