@@ -102,6 +102,8 @@ export const OrganizerDashboard: React.FC = () => {
   const cnicCsvInputRef = useRef<HTMLInputElement>(null);
   const [openAt, setOpenAt] = useState<string>("");
   const [closeAt, setCloseAt] = useState<string>("");
+  const [isPerQuestionTimer, setIsPerQuestionTimer] = useState(false);
+  const [timePerQuestionSeconds, setTimePerQuestionSeconds] = useState(15);
   const [postSubmissionText, setPostSubmissionText] = useState("");
 
   // Manual Question Form States
@@ -244,11 +246,25 @@ export const OrganizerDashboard: React.FC = () => {
 
         const imgData = canvas.toDataURL("image/png");
         const pdf = new jsPDF("p", "mm", "a4");
-        const imgProps = pdf.getImageProperties(imgData);
         const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+
+        const imgProps = pdf.getImageProperties(imgData);
         const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
 
-        pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+        let heightLeft = pdfHeight;
+        let position = 0;
+
+        pdf.addImage(imgData, "PNG", 0, position, pdfWidth, pdfHeight);
+        heightLeft -= pageHeight;
+
+        while (heightLeft > 0) {
+          position = heightLeft - pdfHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, "PNG", 0, position, pdfWidth, pdfHeight);
+          heightLeft -= pageHeight;
+        }
+
         pdf.save(
           `${(quizzes.find((q) => q.id === activeLiveQuizId)?.title || "report").replace(/[^a-z0-9]/gi, "_").toLowerCase()}_Ranked_Report.pdf`,
         );
@@ -326,11 +342,25 @@ export const OrganizerDashboard: React.FC = () => {
 
         const imgData = canvas.toDataURL("image/png");
         const pdf = new jsPDF("p", "mm", "a4");
-        const imgProps = pdf.getImageProperties(imgData);
         const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+
+        const imgProps = pdf.getImageProperties(imgData);
         const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
 
-        pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+        let heightLeft = pdfHeight;
+        let position = 0;
+
+        pdf.addImage(imgData, "PNG", 0, position, pdfWidth, pdfHeight);
+        heightLeft -= pageHeight;
+
+        while (heightLeft > 0) {
+          position = heightLeft - pdfHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, "PNG", 0, position, pdfWidth, pdfHeight);
+          heightLeft -= pageHeight;
+        }
+
         pdf.save(
           `${selectedQuiz.title.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_Question_Paper.pdf`,
         );
@@ -407,11 +437,25 @@ export const OrganizerDashboard: React.FC = () => {
 
         const imgData = canvas.toDataURL("image/png");
         const pdf = new jsPDF("p", "mm", "a4");
-        const imgProps = pdf.getImageProperties(imgData);
         const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+
+        const imgProps = pdf.getImageProperties(imgData);
         const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
 
-        pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+        let heightLeft = pdfHeight;
+        let position = 0;
+
+        pdf.addImage(imgData, "PNG", 0, position, pdfWidth, pdfHeight);
+        heightLeft -= pageHeight;
+
+        while (heightLeft > 0) {
+          position = heightLeft - pdfHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, "PNG", 0, position, pdfWidth, pdfHeight);
+          heightLeft -= pageHeight;
+        }
+
         pdf.save(`${auditAttempt.userId}_Forensic_Audit.pdf`);
       } catch (error) {
         console.error("PDF Generation Error:", error);
@@ -667,7 +711,6 @@ export const OrganizerDashboard: React.FC = () => {
       id: quizId,
       hubId: hub.id,
       title: quizTitle.trim(),
-      timeLimit: Number(quizTimeLimit),
       passPercentage: Number(quizPassPercentage),
       isActive: true,
       isLiveCompetition: false,
@@ -677,6 +720,11 @@ export const OrganizerDashboard: React.FC = () => {
       openAt: "",
       closeAt: "",
       postSubmissionText: postSubmissionText.trim(),
+      perQuestionTimer: isPerQuestionTimer,
+      timePerQuestionSeconds: isPerQuestionTimer
+        ? Number(timePerQuestionSeconds)
+        : undefined,
+      timeLimit: !isPerQuestionTimer ? Number(quizTimeLimit) : 0,
     };
 
     try {
@@ -820,10 +868,26 @@ export const OrganizerDashboard: React.FC = () => {
       openAt: openAt ? new Date(openAt).toISOString() : "",
       closeAt: closeAt ? new Date(closeAt).toISOString() : "",
       postSubmissionText: postSubmissionText.trim(),
+      perQuestionTimer: isPerQuestionTimer,
+      timePerQuestionSeconds: isPerQuestionTimer ? Number(timePerQuestionSeconds) : undefined,
+      timeLimit: !isPerQuestionTimer ? Number(quizTimeLimit) : 0,
     };
 
     try {
       await updateDoc(doc(db, "quizzes", selectedQuiz.id), updatedFields);
+      if (hub) {
+        await updateDoc(doc(db, "hubs", hub.id), {
+          settings: {
+            isPerQuestionTimer,
+            timePerQuestionSeconds: isPerQuestionTimer
+              ? Number(timePerQuestionSeconds)
+              : 0,
+            totalDurationMinutes: !isPerQuestionTimer
+              ? Number(quizTimeLimit)
+              : 0,
+          },
+        });
+      }
 
       const refreshedQuiz = {
         ...selectedQuiz,
@@ -1863,6 +1927,55 @@ export const OrganizerDashboard: React.FC = () => {
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="col-span-1 md:col-span-2">
+                            <label className="flex items-center gap-2 cursor-pointer p-3 bg-brand-bg border border-brand-border rounded-lg mb-4 hover:bg-brand-primary/5 transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={isPerQuestionTimer}
+                                onChange={(e) =>
+                                  setIsPerQuestionTimer(e.target.checked)
+                                }
+                                className="w-4 h-4 text-brand-primary border-brand-border rounded focus:ring-brand-primary"
+                              />
+                              <span className="text-xs font-bold text-brand-text">
+                                Enforce Per-Question Timer
+                              </span>
+                            </label>
+                            {isPerQuestionTimer ? (
+                              <div className="mb-4">
+                                <label className="block text-xs font-bold text-brand-text mb-1">
+                                  Seconds per Question
+                                </label>
+                                <input
+                                  type="number"
+                                  min="5"
+                                  value={timePerQuestionSeconds}
+                                  onChange={(e) =>
+                                    setTimePerQuestionSeconds(
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text text-xs focus:ring-1 focus:ring-brand-primary/30 outline-none"
+                                />
+                              </div>
+                            ) : (
+                              <div className="mb-4">
+                                <label className="block text-xs font-bold text-brand-text mb-1">
+                                  Total Quiz Duration (Minutes)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={quizTimeLimit}
+                                  onChange={(e) =>
+                                    setQuizTimeLimit(Number(e.target.value))
+                                  }
+                                  className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text text-xs focus:ring-1 focus:ring-brand-primary/30 outline-none"
+                                />
+                              </div>
+                            )}
+                          </div>
+
                           <div>
                             <label className="block text-xs font-bold text-brand-text mb-1">
                               Quiz Open Date & Time

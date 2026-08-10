@@ -75,19 +75,19 @@ export const PrintableScoreboard: React.FC<PrintableScoreboardProps> = ({
               className="py-3 px-4 font-black text-sm uppercase tracking-wider"
               style={{ color: "#000000" }}
             >
-              Participant ID
+              Participant Name
+            </th>
+            <th
+              className="py-3 px-4 font-black text-sm uppercase tracking-wider"
+              style={{ color: "#000000" }}
+            >
+              CNIC
             </th>
             <th
               className="py-3 px-4 font-black text-sm uppercase tracking-wider"
               style={{ color: "#000000" }}
             >
               Score
-            </th>
-            <th
-              className="py-3 px-4 font-black text-sm uppercase tracking-wider"
-              style={{ color: "#000000" }}
-            >
-              Completion Date
             </th>
           </tr>
         </thead>
@@ -104,20 +104,20 @@ export const PrintableScoreboard: React.FC<PrintableScoreboardProps> = ({
               >
                 {idx + 1}
               </td>
+              <td className="py-3 px-4 text-sm" style={{ color: "#1f2937" }}>
+                {att.userName || "Unknown"}
+              </td>
               <td
                 className="py-3 px-4 text-sm font-mono"
-                style={{ color: "#1f2937" }}
+                style={{ color: "#6b7280" }}
               >
-                {att.userId}
+                {att.userCnic || "N/A"}
               </td>
               <td
                 className="py-3 px-4 text-sm font-bold"
                 style={{ color: "#000000" }}
               >
                 {att.score}
-              </td>
-              <td className="py-3 px-4 text-sm" style={{ color: "#6b7280" }}>
-                {new Date(att.startedAt || Date.now()).toLocaleString()}
               </td>
             </tr>
           ))}

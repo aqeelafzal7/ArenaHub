@@ -215,6 +215,7 @@ export const QuizSession: React.FC = () => {
 
   // Feedback/Loading States
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("Loading assessment...");
   const [error, setError] = useState<string | null>(null);
 
   // Legal-Grade Telemetry States
@@ -392,7 +393,12 @@ export const QuizSession: React.FC = () => {
         if (!activeAttemptId || !activeQuiz || quizQuestions.length === 0) {
           return;
         }
-        setLoading(true);
+                setLoading(true);
+        if (reason === "Timer Expired") {
+          setLoadingMessage("Examination window closed. Auto-submitting your final answers...");
+        } else {
+          setLoadingMessage("Submitting your answers...");
+        }
         setError(null);
 
         // Clear timer
@@ -907,6 +913,14 @@ export const QuizSession: React.FC = () => {
       if (questionTimerRef.current) clearInterval(questionTimerRef.current);
 
       // Auto-submit current answer (or lack thereof) and move to next question
+      setAnswers((prev) => {
+        const currentQ = quizQuestions[currentQuestionIdx];
+        if (currentQ && !prev[currentQ.id]) {
+          return { ...prev, [currentQ.id]: "TIMED_OUT" };
+        }
+        return prev;
+      });
+
       if (currentQuestionIdx < quizQuestions.length - 1) {
         setCurrentQuestionIdx((p) => p + 1);
       } else {
