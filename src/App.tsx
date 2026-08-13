@@ -20,6 +20,8 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { PwaGateway } from "./components/PwaGateway";
 import { ShieldAlert } from "lucide-react";
 
+import { Settings } from "./pages/Settings";
+
 const AppContent: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
   const { user, profile, loading, isQuizStarted } = useAuth();
@@ -118,6 +120,38 @@ const AppContent: React.FC = () => {
               element={
                 <ProtectedRoute allowedRoles={["super_admin"]}>
                   <SuperAdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* PreFlight and Quiz Session */}
+            <Route
+              path="/quiz/:id/pre-flight"
+              element={
+                <ProtectedRoute>
+                  <PwaGateway>
+                    <PreFlight />
+                  </PwaGateway>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/quiz/:id/session"
+              element={
+                <ProtectedRoute>
+                  <PwaGateway>
+                    <QuizSession />
+                  </PwaGateway>
+                </ProtectedRoute>
+              }
+            />
+            
+            {/* Settings */}
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <Settings />
                 </ProtectedRoute>
               }
             />

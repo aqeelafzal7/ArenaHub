@@ -694,6 +694,13 @@ export const OrganizerDashboard: React.FC = () => {
   };
 
   // 3. Quiz Management Handlers
+  const generateJoinCode = () => {
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const chars = Array.from({length: 3}, () => letters[Math.floor(Math.random() * letters.length)]).join('');
+    const nums = Math.floor(100 + Math.random() * 900); // 3 digit number
+    return `${chars}${nums}`; // Example: ABC123
+  };
+
   const handleCreateQuiz = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !hub) {
@@ -706,10 +713,12 @@ export const OrganizerDashboard: React.FC = () => {
     setError(null);
 
     const quizId = doc(collection(db, "quizzes")).id;
+    const joinCode = generateJoinCode();
 
     const newQuiz: Quiz = {
       id: quizId,
       hubId: hub.id,
+      joinCode,
       title: quizTitle.trim(),
       passPercentage: Number(quizPassPercentage),
       isActive: true,
@@ -1737,7 +1746,7 @@ export const OrganizerDashboard: React.FC = () => {
                           </div>
 
                           <div className="mt-2.5 bg-brand-bg px-2 py-1 rounded text-[9px] font-mono text-brand-muted flex justify-between items-center">
-                            <span className="truncate">Key: {quiz.id}</span>
+                            <span className="truncate">Code: <span className="font-bold text-brand-text text-[10px]">{quiz.joinCode || quiz.id}</span></span>
                             <span className="shrink-0 font-bold text-brand-primary cursor-pointer hover:underline">
                               Select
                             </span>

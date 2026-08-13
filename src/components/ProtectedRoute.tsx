@@ -7,11 +7,12 @@ import { UserProfile } from '../types';
 import { ShieldAlert } from 'lucide-react';
 
 interface ProtectedRouteProps {
-  allowedRoles: string[];
+  allowedRoles?: string[];
   children: React.ReactNode;
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allowedRoles, children }) => {
+
   const { user, loading } = useAuth();
   const [localProfile, setLocalProfile] = useState<UserProfile | null>(null);
   const [isChecking, setIsChecking] = useState(true);
@@ -60,7 +61,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allowedRoles, ch
   }
 
   // If we fetched the profile but the role is not allowed
-  if (localProfile && !allowedRoles.includes(localProfile.role)) {
+  if (allowedRoles && localProfile && !allowedRoles.includes(localProfile.role)) {
     return <Navigate to="/unauthorized" replace />;
   }
 

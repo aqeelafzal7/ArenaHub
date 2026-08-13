@@ -34,6 +34,7 @@ export interface Quiz {
   id: string;
   hubId: string;
   title: string;
+  joinCode?: string;
   timeLimit: number; // in minutes
   passPercentage: number;
   isActive: boolean;
