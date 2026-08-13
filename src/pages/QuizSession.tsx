@@ -191,9 +191,8 @@ export const QuizSession: React.FC = () => {
 
   // Timer States
   const [timeLeft, setTimeLeft] = useState(0); // in seconds
-  const [questionTimer, setQuestionTimer] = useState<number | null>(null);
+  const [timeOffset, setTimeOffset] = useState<number>(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const questionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isSubmittingRef = useRef(false);
   const strikeCount = useRef(0);
   const cheatFlagsRef = useRef<string[]>([]);
@@ -230,8 +229,22 @@ export const QuizSession: React.FC = () => {
     }
   };
 
-  // Fetch Telemetry on Mount
+  // Fetch Telemetry & Sync True Time on Mount
   useEffect(() => {
+    // Sync with global atomic clock
+    const syncServerTime = async () => {
+      try {
+        const res = await fetch("https://worldtimeapi.org/api/timezone/Etc/UTC");
+        const data = await res.json();
+        const trueServerTime = new Date(data.datetime).getTime();
+        const localTime = Date.now();
+        setTimeOffset(trueServerTime - localTime); // Save the exact difference
+      } catch (error) {
+        console.warn("Time sync failed, using local fallback.");
+      }
+    };
+    syncServerTime();
+
     // Fetch IP address
     fetch("https://api.ipify.org?format=json")
       .then((r) => r.json())
@@ -381,6 +394,9 @@ export const QuizSession: React.FC = () => {
   const handleStartQuiz = async () => {};
 
   // 3.5 Submit Quiz Handler (Stable Callback)
+  // Helper function to get cheat-proof time anytime:
+  const getTrueTime = useCallback(() => Date.now() + timeOffset, [timeOffset]);
+
   const handleSubmitQuiz = useCallback(
     async (
       reason: "Submitted" | "Timer Expired" | "Locked Out",
@@ -423,7 +439,8 @@ export const QuizSession: React.FC = () => {
         const isPassed = finalPercentage >= activeQuiz.passPercentage;
 
         const finalStatus = forceLockout ? "Locked Out" : "Submitted";
-        const secondsConsumed = activeQuiz.timeLimit * 60 - timeLeft;
+        const startMs = new Date(exactStartTime).getTime();
+        const secondsConsumed = Math.floor((getTrueTime() - startMs) / 1000);
 
         const attemptDocRef = doc(db, "attempts", activeAttemptId);
         const currentFlags = [...cheatFlagsRef.current];
@@ -855,63 +872,67 @@ export const QuizSession: React.FC = () => {
 
   // 4. Timer effect & Scheduled window breach check
   useEffect(() => {
-    if (!isQuizStarted || !exactStartTime || !activeQuiz) return;
+    if (!isQuizStarted || !activeQuiz) return;
+    
+    const closeTime = activeQuiz.closeAt || (activeQuiz as any).endTime;
+    if (!closeTime) return;
 
-    timerRef.current = setInterval(() => {
-      // Strict Expiration Enforcement
-      const closeTime = activeQuiz.closeAt || (activeQuiz as any).endTime;
-      if (closeTime) {
-        const deadlineMs = new Date(closeTime).getTime();
-        if (Date.now() >= deadlineMs) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          setWarningModalMessage(
-            "SESSION EXPIRED: The official closing time for this exam has been reached.",
-          );
-          setWarningModalOpen(true);
-          handleSubmitQuiz("Timer Expired", true);
-          return;
-        }
-      }
-
-      // Absolute Time Calculation
-      const startMs = new Date(exactStartTime).getTime();
-      const elapsedSeconds = Math.floor((Date.now() - startMs) / 1000);
-      const totalAllowedSeconds = activeQuiz.timeLimit * 60;
-      const remaining = Math.max(0, totalAllowedSeconds - elapsedSeconds);
-      setTimeLeft(remaining);
-
-      // Standard Timeout
-      if (remaining <= 0) {
-        if (timerRef.current) clearInterval(timerRef.current);
-        handleSubmitQuiz("Timer Expired", true);
+    const killSwitchInterval = setInterval(() => {
+      const globalEndTime = new Date(closeTime).getTime();
+      
+      // Use the cheat-proof true time
+      if (getTrueTime() >= globalEndTime) {
+        clearInterval(killSwitchInterval);
+        setWarningModalMessage(
+          "SESSION EXPIRED: The official closing time for this exam has been reached."
+        );
+        setWarningModalOpen(true);
+        handleSubmitQuiz("Timer Expired", true); 
       }
     }, 1000);
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isQuizStarted, exactStartTime, activeQuiz, handleSubmitQuiz]);
+    return () => clearInterval(killSwitchInterval);
+  }, [isQuizStarted, activeQuiz, getTrueTime, handleSubmitQuiz]);
 
-  // 4.1 Time Starvation / Per-Question Timer Logic
+  // 4.1 Initialize Timer
   useEffect(() => {
-    if (
-      !isQuizStarted ||
-      !activeQuiz?.perQuestionTimer ||
-      !activeQuiz?.timePerQuestionSeconds
-    ) {
-      setQuestionTimer(null);
-      return;
+    if (!isQuizStarted || !exactStartTime || !activeQuiz) return;
+    
+    if (activeQuiz.perQuestionTimer) {
+      setTimeLeft(activeQuiz.timePerQuestionSeconds || 0);
+    } else {
+      const startMs = new Date(exactStartTime).getTime();
+      const elapsedSeconds = Math.floor((getTrueTime() - startMs) / 1000);
+      const totalAllowedSeconds = activeQuiz.timeLimit * 60;
+      const remaining = Math.max(0, totalAllowedSeconds - elapsedSeconds);
+      setTimeLeft(remaining);
     }
-    setQuestionTimer(activeQuiz.timePerQuestionSeconds);
-  }, [isQuizStarted, activeQuiz, currentQuestionIdx]);
+  }, [isQuizStarted, currentQuestionIdx, activeQuiz, exactStartTime, getTrueTime]);
 
+  // 4.2 Local Countdown Interval (Counts down safely)
   useEffect(() => {
-    if (questionTimer === null || !isQuizStarted || isQuestionMutationsLocked)
-      return;
+    if (!isQuizStarted) return;
 
-    if (questionTimer <= 0) {
-      if (questionTimerRef.current) clearInterval(questionTimerRef.current);
+    const localTimer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(localTimer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
+    return () => clearInterval(localTimer);
+  }, [isQuizStarted, currentQuestionIdx, activeQuiz?.perQuestionTimer]);
+
+  // 4.3 Trigger Action on Timer Expired
+  useEffect(() => {
+    if (!isQuizStarted || timeLeft > 0) return;
+
+    if (activeQuiz?.perQuestionTimer) {
+      if (isQuestionMutationsLocked) return;
+      
       // Auto-submit current answer (or lack thereof) and move to next question
       setAnswers((prev) => {
         const currentQ = quizQuestions[currentQuestionIdx];
@@ -924,24 +945,18 @@ export const QuizSession: React.FC = () => {
       if (currentQuestionIdx < quizQuestions.length - 1) {
         setCurrentQuestionIdx((p) => p + 1);
       } else {
-        handleSubmitQuiz("Submitted");
+        handleSubmitQuiz("Submitted", true);
       }
-      return;
+    } else {
+      handleSubmitQuiz("Timer Expired", true);
     }
-
-    questionTimerRef.current = setInterval(() => {
-      setQuestionTimer((prev) => (prev !== null ? prev - 1 : null));
-    }, 1000);
-
-    return () => {
-      if (questionTimerRef.current) clearInterval(questionTimerRef.current);
-    };
   }, [
-    questionTimer,
+    timeLeft,
     isQuizStarted,
-    isQuestionMutationsLocked,
+    activeQuiz?.perQuestionTimer,
     currentQuestionIdx,
-    quizQuestions.length,
+    quizQuestions,
+    isQuestionMutationsLocked,
     handleSubmitQuiz,
   ]);
 
@@ -1100,31 +1115,31 @@ export const QuizSession: React.FC = () => {
                   <RefreshCw className="h-5 w-5 text-brand-muted group-hover:text-brand-primary transition-colors" />
                 </button>
 
-                {activeQuiz.perQuestionTimer && questionTimer !== null && (
+                {activeQuiz.perQuestionTimer ? (
                   <div
                     className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs ${
-                      questionTimer <= 5
+                      timeLeft <= 5
                         ? "animate-pulse bg-red-100 border border-red-400 text-red-900"
                         : "bg-brand-bg border border-brand-border text-brand-text"
                     }`}
                   >
                     <Timer className="h-5 w-5" />
                     Q-Time: 00:
-                    {questionTimer < 10 ? `0${questionTimer}` : questionTimer}
+                    {timeLeft < 10 ? `0${timeLeft}` : timeLeft}
+                  </div>
+                ) : (
+                  <div
+                    className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs animate-bounce ${
+                      isColorblind
+                        ? "bg-blue-100 border border-blue-300 text-blue-900"
+                        : "bg-red-50 border border-red-200 text-red-800"
+                    }`}
+                  >
+                    <Timer className="h-5 w-5" />
+                    {Math.floor(timeLeft / 60)}:{timeLeft % 60 < 10 ? "0" : ""}
+                    {timeLeft % 60}
                   </div>
                 )}
-
-                <div
-                  className={`font-bold px-4 py-2 rounded-xl flex items-center gap-2 font-mono text-sm sm:text-base shadow-xs animate-bounce ${
-                    isColorblind
-                      ? "bg-blue-100 border border-blue-300 text-blue-900"
-                      : "bg-red-50 border border-red-200 text-red-800"
-                  }`}
-                >
-                  <Timer className="h-5 w-5" />
-                  {Math.floor(timeLeft / 60)}:{timeLeft % 60 < 10 ? "0" : ""}
-                  {timeLeft % 60}
-                </div>
               </div>
             </div>
 
