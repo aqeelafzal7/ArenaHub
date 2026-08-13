@@ -146,9 +146,6 @@ export const ParticipantDashboard: React.FC = () => {
                   <div className="flex items-start justify-between">
                     <div>
                       <h3 className="font-bold text-brand-text text-lg mb-1">{quiz.title}</h3>
-                      <p className="text-brand-muted text-sm flex items-center gap-2">
-                         ID: {quiz.id.substring(0,8)}...
-                      </p>
                     </div>
                     <div className="bg-brand-primary/10 text-brand-primary p-2 rounded-lg">
                       <ArrowRight className="w-5 h-5" />

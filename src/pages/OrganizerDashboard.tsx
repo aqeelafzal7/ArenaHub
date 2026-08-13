@@ -732,7 +732,7 @@ export const OrganizerDashboard: React.FC = () => {
       perQuestionTimer: isPerQuestionTimer,
       timePerQuestionSeconds: isPerQuestionTimer
         ? Number(timePerQuestionSeconds)
-        : undefined,
+        : null,
       timeLimit: !isPerQuestionTimer ? Number(quizTimeLimit) : 0,
     };
 
@@ -878,7 +878,7 @@ export const OrganizerDashboard: React.FC = () => {
       closeAt: closeAt ? new Date(closeAt).toISOString() : "",
       postSubmissionText: postSubmissionText.trim(),
       perQuestionTimer: isPerQuestionTimer,
-      timePerQuestionSeconds: isPerQuestionTimer ? Number(timePerQuestionSeconds) : undefined,
+      timePerQuestionSeconds: isPerQuestionTimer ? Number(timePerQuestionSeconds) : null,
       timeLimit: !isPerQuestionTimer ? Number(quizTimeLimit) : 0,
     };
 
@@ -1746,7 +1746,7 @@ export const OrganizerDashboard: React.FC = () => {
                           </div>
 
                           <div className="mt-2.5 bg-brand-bg px-2 py-1 rounded text-[9px] font-mono text-brand-muted flex justify-between items-center">
-                            <span className="truncate">Code: <span className="font-bold text-brand-text text-[10px]">{quiz.joinCode || quiz.id}</span></span>
+                            <span className="truncate">Code: <span className="font-bold text-brand-text text-[10px]">{quiz.joinCode || 'Legacy Quiz (No Code)'}</span></span>
                             <span className="shrink-0 font-bold text-brand-primary cursor-pointer hover:underline">
                               Select
                             </span>
