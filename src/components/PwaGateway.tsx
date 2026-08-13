@@ -14,6 +14,7 @@ export const PwaGateway: React.FC<PwaGatewayProps> = ({ children }) => {
            document.referrer.includes('android-app://');
   });
   const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
 
   useEffect(() => {
     const checkStandalone = () => {
@@ -30,6 +31,7 @@ export const PwaGateway: React.FC<PwaGatewayProps> = ({ children }) => {
     const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
       setInstallPrompt(e);
+      setIsInstallable(true);
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -55,14 +57,21 @@ export const PwaGateway: React.FC<PwaGatewayProps> = ({ children }) => {
   };
 
   const handleInstallClick = async () => {
-    if (installPrompt) {
-      installPrompt.prompt();
-      const { outcome } = await installPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setInstallPrompt(null);
-      }
-    } else {
-      alert(getInstructions());
+    if (!installPrompt) {
+      alert("To install on this device, please use your browser's menu (e.g., 'Add to Home Screen' or 'Install App').");
+      return;
+    }
+    
+    // Show the native install prompt
+    installPrompt.prompt();
+    
+    // Wait for the user to respond to the prompt
+    const { outcome } = await installPrompt.userChoice;
+    
+    // Optionally, clear the prompt if they accepted
+    if (outcome === 'accepted') {
+      setInstallPrompt(null);
+      setIsInstallable(false);
     }
   };
 
@@ -83,19 +92,21 @@ export const PwaGateway: React.FC<PwaGatewayProps> = ({ children }) => {
           To maintain a secure and proctored environment, this quiz platform must be accessed as an installed application. Standard browser tabs are not supported.
         </p>
         
-        <div className="bg-brand-bg border border-brand-border rounded-xl p-5 mb-8">
-          <h3 className="font-extrabold text-brand-text text-sm mb-2 uppercase tracking-wide">Installation Instructions</h3>
-          <p className="text-brand-primary font-medium text-sm">
-            {getInstructions()}
-          </p>
-        </div>
+        {!isInstallable && (
+          <div className="bg-brand-bg border border-brand-border rounded-xl p-5 mb-8">
+            <h3 className="font-extrabold text-brand-text text-sm mb-2 uppercase tracking-wide">Installation Instructions</h3>
+            <p className="text-brand-primary font-medium text-sm">
+              {getInstructions()}
+            </p>
+          </div>
+        )}
 
         <button
           onClick={handleInstallClick}
           className="w-full bg-brand-primary text-white font-bold py-3.5 px-4 rounded-xl hover:bg-opacity-90 transition-all shadow-lg shadow-brand-primary/20 flex items-center justify-center gap-2"
         >
           <Download className="w-5 h-5" />
-          <span>Launch Installed App</span>
+          <span>Install ArenaHub App</span>
         </button>
       </div>
     </div>
