@@ -750,14 +750,31 @@ export const OrganizerDashboard: React.FC = () => {
   };
 
   const handleCnicInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    // Auto-format to XXXXX-XXXXXXX-X just like onboarding
-    const digits = val.replace(/\D/g, "").substring(0, 13);
-    let formatted = "";
-    if (digits.length > 0) formatted += digits.substring(0, 5);
-    if (digits.length > 5) formatted += "-" + digits.substring(5, 12);
-    if (digits.length > 12) formatted += "-" + digits.substring(12, 13);
-    setCnicInputValue(formatted);
+    const value = e.target.value;
+
+    if (value.includes(",")) {
+      const newCnic = value.replace(/,/g, "").trim();
+      const digits = newCnic.replace(/\D/g, "").substring(0, 13);
+      let formatted = "";
+      if (digits.length > 0) formatted += digits.substring(0, 5);
+      if (digits.length > 5) formatted += "-" + digits.substring(5, 12);
+      if (digits.length > 12) formatted += "-" + digits.substring(12, 13);
+
+      const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+      if (cnicRegex.test(formatted) && !allowedCnics.includes(formatted)) {
+        setAllowedCnics((prev) => [...prev, formatted]);
+        setCnicInputValue("");
+      } else {
+        setCnicInputValue(formatted);
+      }
+    } else {
+      const digits = value.replace(/\D/g, "").substring(0, 13);
+      let formatted = "";
+      if (digits.length > 0) formatted += digits.substring(0, 5);
+      if (digits.length > 5) formatted += "-" + digits.substring(5, 12);
+      if (digits.length > 12) formatted += "-" + digits.substring(12, 13);
+      setCnicInputValue(formatted);
+    }
   };
 
   const handleCnicKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1929,8 +1946,7 @@ export const OrganizerDashboard: React.FC = () => {
                               <kbd className="bg-brand-border/50 px-1 py-0.5 rounded text-brand-text font-bold">
                                 Enter
                               </kbd>{" "}
-                              to add a CNIC manually, or upload a CSV/text file
-                              of CNICs.
+                              or type a Comma (,) to add a CNIC manually, or upload a CSV.
                             </p>
                           </div>
                         </div>

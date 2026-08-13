@@ -7,7 +7,7 @@ import { ShieldAlert, CheckCircle, Video, Mic, AlertOctagon, Loader2 } from 'luc
 import { Quiz, Hub } from '../types';
 
 export const PreFlight: React.FC = () => {
-  const { quizId } = useParams<{ quizId: string }>();
+  const { id } = useParams<{ id: string }>();
   const { user, profile } = useAuth();
   const navigate = useNavigate();
   
@@ -21,11 +21,25 @@ export const PreFlight: React.FC = () => {
 
   useEffect(() => {
     const fetchDetails = async () => {
-      if (!quizId) return;
+      if (!id) return;
       try {
-        const qDoc = await getDoc(doc(db, 'quizzes', quizId));
+        // Try fetching by document ID first
+        let qDoc = await getDoc(doc(db, 'quizzes', id));
+        let qData: Quiz | null = null;
+
         if (qDoc.exists()) {
-          const qData = qDoc.data() as Quiz;
+          qData = { id: qDoc.id, ...qDoc.data() } as Quiz;
+        } else {
+          // Fallback: Check if it's a joinCode
+          const q = query(collection(db, 'quizzes'), where('joinCode', '==', id.toUpperCase()));
+          const querySnapshot = await getDocs(q);
+          if (!querySnapshot.empty) {
+            const docSnap = querySnapshot.docs[0];
+            qData = { id: docSnap.id, ...docSnap.data() } as Quiz;
+          }
+        }
+
+        if (qData) {
           setQuiz(qData);
           if (qData.hubId) {
              const hDoc = await getDoc(doc(db, 'hubs', qData.hubId));
@@ -34,7 +48,7 @@ export const PreFlight: React.FC = () => {
              }
           }
         } else {
-          setError('Quiz not found.');
+          setError('Quiz not found. Please check your join code.');
         }
       } catch (err) {
         console.error(err);
@@ -44,7 +58,7 @@ export const PreFlight: React.FC = () => {
       }
     };
     fetchDetails();
-  }, [quizId]);
+  }, [id]);
 
   const checkHardware = async () => {
     setHardwareStatus('checking');
@@ -121,11 +135,19 @@ export const PreFlight: React.FC = () => {
   };
 
   if (loading) {
-    return <div className="p-8 text-center"><Loader2 className="mx-auto animate-spin" /></div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary"></div>
+      </div>
+    );
   }
 
   if (error || !quiz) {
-    return <div className="p-8 text-center text-red-500">{error || 'Unknown error'}</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center text-red-600 font-bold p-8 text-center">
+        {error || 'Unknown error'}
+      </div>
+    );
   }
 
   const isReady = hardwareStatus === 'ready' || hardwareStatus === 'no_hardware_bypass';
