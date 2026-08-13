@@ -103,7 +103,7 @@ export const PwaGateway: React.FC<PwaGatewayProps> = ({ children }) => {
 
         <button
           onClick={handleInstallClick}
-          className="w-full bg-brand-primary text-white font-bold py-3.5 px-4 rounded-xl hover:bg-opacity-90 transition-all shadow-lg shadow-brand-primary/20 flex items-center justify-center gap-2"
+          className="w-full bg-blue-600 text-white rounded-lg py-3 flex items-center justify-center gap-2 hover:bg-blue-700 transition-colors"
         >
           <Download className="w-5 h-5" />
           <span>Install ArenaHub App</span>
