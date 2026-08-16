@@ -1903,7 +1903,7 @@ export const OrganizerDashboard: React.FC = () => {
                               {/* Map existing CNIC tags */}
                               {allowedCnics.map((cnic, index) => (
                                 <span
-                                  key={index}
+                                  key={`${cnic}-${index}`}
                                   className="flex items-center gap-1 px-1.5 py-0.5 bg-brand-primary/10 text-brand-primary border border-brand-primary/20 rounded text-[10px] font-mono tracking-wide"
                                 >
                                   {cnic}

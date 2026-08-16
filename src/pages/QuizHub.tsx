@@ -166,6 +166,7 @@ export const QuizHub: React.FC = () => {
   // Timer States
   const [timeLeft, setTimeLeft] = useState(0); // in seconds
   const [questionTimer, setQuestionTimer] = useState<number | null>(null);
+  const [timeOffset, setTimeOffset] = useState<number>(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const questionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isSubmittingRef = useRef(false);
@@ -202,8 +203,23 @@ export const QuizHub: React.FC = () => {
     }
   };
 
-  // Fetch Telemetry on Mount
+  // Fetch Telemetry & Sync True Time on Mount
   useEffect(() => {
+    // Sync with global atomic clock (strict UTC)
+    const syncServerTime = async () => {
+      try {
+        const res = await fetch('https://timeapi.io/api/Time/current/zone?timeZone=UTC');
+        const data = await res.json();
+        const rawDate = data.dateTime || data.dateTimeUtc || data.currentLocalTime;
+        const trueServerTime = new Date(rawDate.endsWith('Z') ? rawDate : rawDate + 'Z').getTime();
+        const localTime = Date.now();
+        setTimeOffset(trueServerTime - localTime);
+      } catch (error) {
+        console.warn('Time sync failed, using local fallback.');
+      }
+    };
+    syncServerTime();
+
     // Fetch IP address
     fetch('https://api.ipify.org?format=json')
       .then((r) => r.json())
@@ -738,59 +754,42 @@ export const QuizHub: React.FC = () => {
             // 1. Detect cell phones (coco-ssd)
             const predictions = await cocoModel.detect(videoEl);
             const hasPhone = predictions.some((pred: any) => pred.class === 'cell phone');
-            
+
             // 2. Detect multiple faces (blazeface)
             const faces = await faceModel.estimateFaces(videoEl, false);
-            // Increase Confidence: Set the face detection model's minimum confidence score threshold to 0.85
             const highConfidenceFaces = faces.filter((f: any) => {
               const prob = Array.isArray(f.probability) ? f.probability[0] : f.probability;
-              return prob > 0.85;
+              return prob > 0.95;
             });
 
-            let isViolation = false;
             let violationType = '';
-
             if (hasPhone) {
-              isViolation = true;
               violationType = 'Cell Phone Detected';
             } else if (highConfidenceFaces.length > 1) {
-              isViolation = true;
-              violationType = 'Multiple People Detected';
+              violationType = 'Multiple Persons Detected';
             } else if (highConfidenceFaces.length === 0) {
-              isViolation = true;
               violationType = 'No Face Detected';
             }
 
-            if (isViolation) {
-              strikeCount.current += 1;
-              console.log(`AI Detected: ${violationType} (Strike ${strikeCount.current})`);
-              
-              if (strikeCount.current >= 3) {
-                setAiWarning(`Warning: ${violationType}. Please ensure your face is visible and no phones are in view.`);
-                const now = Date.now();
-                if (now - lastUploadTimeRef.current > 45000) { // 45-second throttling lock
-                  lastUploadTimeRef.current = now;
-                  
-                  await updateDoc(doc(db, 'attempts', activeAttemptId), {
-                    cheatFlags: arrayUnion(`AI Flag: ${violationType}`)
-                  });
-                  
-                  // Capture image asynchronously
-                  captureAndUploadSnapshot(violationType.replace(/ /g, '_')).then(async (driveUrl) => {
-                    if (driveUrl) {
-                      const logMsg = `AI Flag: ${violationType} [Proof Link: ${driveUrl}]`;
-                      
-                      // Update firestore attempt log dynamically
-                      await updateDoc(doc(db, 'attempts', activeAttemptId), {
-                        cheatFlags: arrayUnion(logMsg),
-                        updatedAt: serverTimestamp()
-                      });
-                    }
-                  });
-                }
+            if (violationType) {
+              setAiWarning(`Warning: ${violationType}. Incident recorded.`);
+
+              const now = Date.now();
+              // 10-second throttle to prevent API rate limits from crashing, 
+              // but fires INSTANTLY on the very first frame a violation is seen.
+              if (now - lastUploadTimeRef.current > 10000) {
+                lastUploadTimeRef.current = now;
+
+                captureAndUploadSnapshot(violationType.replace(/ /g, '_')).then(async (driveUrl) => {
+                  if (activeAttemptId) {
+                    await updateDoc(doc(db, 'attempts', activeAttemptId), {
+                      cheatFlags: arrayUnion(`AI Flag: ${violationType} [Proof: ${driveUrl || 'Upload Failed'}]`),
+                      updatedAt: serverTimestamp()
+                    });
+                  }
+                });
               }
             } else {
-              strikeCount.current = 0;
               setAiWarning('');
             }
           } catch (err) {
