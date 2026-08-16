@@ -234,9 +234,10 @@ export const QuizSession: React.FC = () => {
     // Sync with global atomic clock
     const syncServerTime = async () => {
       try {
-        const res = await fetch("https://worldtimeapi.org/api/timezone/Etc/UTC");
+        const res = await fetch("https://timeapi.io/api/Time/current/zone?timeZone=UTC");
         const data = await res.json();
-        const trueServerTime = new Date(data.datetime).getTime();
+        const dateString = data.dateTime || data.dateTimeUtc || data.currentLocalTime;
+        const trueServerTime = new Date(dateString).getTime();
         const localTime = Date.now();
         setTimeOffset(trueServerTime - localTime); // Save the exact difference
       } catch (error) {
@@ -363,7 +364,10 @@ export const QuizSession: React.FC = () => {
   // 1. Fetch Hub branding and Questions
   const [questions, setQuestions] = useState<Question[]>([]);
 
-  const handleLoadHub = async (e: React.FormEvent) => {};
+  const handleLoadHub = async (e: React.FormEvent) => {
+    localStorage.removeItem("arena_active_session");
+    localStorage.removeItem("arena_saved_answers");
+  };
 
   // Helper to get quiz schedule
   const getQuizSchedule = (quiz: Quiz) => {
@@ -376,11 +380,11 @@ export const QuizSession: React.FC = () => {
   const isOutsideTimeWindow = (quiz: Quiz) => {
     const { start, end } = getQuizSchedule(quiz);
     const now = Date.now();
-    if (start) {
+    if (start && start.trim() !== "") {
       const startTime = new Date(start).getTime();
       if (now < startTime) return "BEFORE";
     }
-    if (end) {
+    if (end && end.trim() !== "") {
       const endTime = new Date(end).getTime();
       if (now > endTime) return "AFTER";
     }
@@ -388,7 +392,10 @@ export const QuizSession: React.FC = () => {
   };
 
   // 2. Fetch Quiz
-  const handleLoadQuiz = async (e: React.FormEvent) => {};
+  const handleLoadQuiz = async (e: React.FormEvent) => {
+    localStorage.removeItem("arena_active_session");
+    localStorage.removeItem("arena_saved_answers");
+  };
 
   // 3. Start Proctored Quiz
   const handleStartQuiz = async () => {};
@@ -798,11 +805,14 @@ export const QuizSession: React.FC = () => {
 
     // Advanced contextual speech evaluation
     recognition.onresult = async (event: any) => {
-      const currentTranscript = event.results[
-        event.results.length - 1
-      ][0].transcript
-        .toLowerCase()
-        .trim();
+      // Bulletproof safety checks for empty microphone events
+      if (!event.results || event.results.length === 0) return;
+      const lastResult = event.results[event.results.length - 1];
+      if (!lastResult || lastResult.length === 0 || !lastResult[0]) return;
+
+      const currentTranscript = lastResult[0].transcript.toLowerCase().trim();
+      if (!currentTranscript) return; // Ignore blank audio
+
       console.log("AI Acoustic Intercept:", currentTranscript);
 
       const now = Date.now();
@@ -875,23 +885,23 @@ export const QuizSession: React.FC = () => {
     if (!isQuizStarted || !activeQuiz) return;
     
     const closeTime = activeQuiz.closeAt || (activeQuiz as any).endTime;
-    if (!closeTime) return;
+    if (closeTime && typeof closeTime === "string" && closeTime.trim() !== "") {
+      const killSwitchInterval = setInterval(() => {
+        const globalEndTime = new Date(closeTime).getTime();
+        
+        // Use the cheat-proof true time
+        if (getTrueTime() >= globalEndTime) {
+          clearInterval(killSwitchInterval);
+          setWarningModalMessage(
+            "SESSION EXPIRED: The official closing time for this exam has been reached."
+          );
+          setWarningModalOpen(true);
+          handleSubmitQuiz("Timer Expired", true); 
+        }
+      }, 1000);
 
-    const killSwitchInterval = setInterval(() => {
-      const globalEndTime = new Date(closeTime).getTime();
-      
-      // Use the cheat-proof true time
-      if (getTrueTime() >= globalEndTime) {
-        clearInterval(killSwitchInterval);
-        setWarningModalMessage(
-          "SESSION EXPIRED: The official closing time for this exam has been reached."
-        );
-        setWarningModalOpen(true);
-        handleSubmitQuiz("Timer Expired", true); 
-      }
-    }, 1000);
-
-    return () => clearInterval(killSwitchInterval);
+      return () => clearInterval(killSwitchInterval);
+    }
   }, [isQuizStarted, activeQuiz, getTrueTime, handleSubmitQuiz]);
 
   // 4.1 Initialize Timer

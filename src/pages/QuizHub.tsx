@@ -320,6 +320,8 @@ export const QuizHub: React.FC = () => {
 
   const handleLoadHub = async (e: React.FormEvent) => {
     e.preventDefault();
+    localStorage.removeItem('arena_active_session');
+    localStorage.removeItem('arena_saved_answers');
     setError(null);
     setLoading(true);
     
@@ -370,6 +372,8 @@ export const QuizHub: React.FC = () => {
   // 2. Fetch Quiz
   const handleLoadQuiz = async (e: React.FormEvent) => {
     e.preventDefault();
+    localStorage.removeItem('arena_active_session');
+    localStorage.removeItem('arena_saved_answers');
     if (!activeHub) return;
     setError(null);
     setIsWhitelistBlocked(false);
@@ -884,7 +888,14 @@ export const QuizHub: React.FC = () => {
 
     // Advanced contextual speech evaluation
     recognition.onresult = async (event: any) => {
-      const currentTranscript = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
+      // Bulletproof safety checks for empty microphone events
+      if (!event.results || event.results.length === 0) return;
+      const lastResult = event.results[event.results.length - 1];
+      if (!lastResult || lastResult.length === 0 || !lastResult[0]) return;
+
+      const currentTranscript = lastResult[0].transcript.toLowerCase().trim();
+      if (!currentTranscript) return; // Ignore blank audio
+
       console.log("AI Acoustic Intercept:", currentTranscript);
 
       const now = Date.now();
@@ -951,7 +962,7 @@ export const QuizHub: React.FC = () => {
     timerRef.current = setInterval(() => {
       // Strict Expiration Enforcement
       const closeTime = activeQuiz.closeAt || (activeQuiz as any).endTime;
-      if (closeTime) {
+      if (closeTime && typeof closeTime === 'string' && closeTime.trim() !== '') {
         const deadlineMs = new Date(closeTime).getTime();
         if (Date.now() >= deadlineMs) {
           if (timerRef.current) clearInterval(timerRef.current);

@@ -58,6 +58,8 @@ export const ParticipantDashboard: React.FC = () => {
 
   const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
+    localStorage.removeItem('arena_active_session');
+    localStorage.removeItem('arena_saved_answers');
     if (!joinCode.trim() || !selectedQuiz) return;
     setError(null);
     setJoinLoading(true);
