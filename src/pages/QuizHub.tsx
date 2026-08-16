@@ -575,7 +575,8 @@ export const QuizHub: React.FC = () => {
       const isPassed = finalPercentage >= activeQuiz.passPercentage;
 
       const finalStatus = forceLockout ? 'Locked Out' : 'Submitted';
-      const secondsConsumed = (activeQuiz.timeLimit * 60) - timeLeft;
+      const startMs = new Date(exactStartTime).getTime();
+      const secondsConsumed = Math.max(0, Math.min(activeQuiz.timeLimit * 60, Math.floor((Date.now() - startMs) / 1000)));
 
       const attemptDocRef = doc(db, 'attempts', activeAttemptId);
       const currentFlags = [...cheatFlagsRef.current];
@@ -640,7 +641,7 @@ export const QuizHub: React.FC = () => {
       isSubmittingRef.current = false;
       setLoading(false);
     }
-  }, [activeAttemptId, activeQuiz, quizQuestions, answers, timeLeft, activeHub, user, profile, ipAddress, deviceInfo, exactStartTime]);
+  }, [activeAttemptId, activeQuiz, quizQuestions, answers, activeHub, user, profile, ipAddress, deviceInfo, exactStartTime]);
 
   // Camera & stream lifecycle hooks
   useEffect(() => {
@@ -955,17 +956,17 @@ export const QuizHub: React.FC = () => {
     };
   }, [isQuizStarted, activeAttemptId, quizQuestions, currentQuestionIdx]);
 
-  // 4. Timer effect & Scheduled window breach check
+  // 4. Global Timer & Scheduled window breach check
   useEffect(() => {
     if (!isQuizStarted || !exactStartTime || !activeQuiz) return;
 
-    timerRef.current = setInterval(() => {
-      // Strict Expiration Enforcement
+    const globalInterval = setInterval(() => {
+      // 1. Strict Expiration Enforcement
       const closeTime = activeQuiz.closeAt || (activeQuiz as any).endTime;
-      if (closeTime && typeof closeTime === 'string' && closeTime.trim() !== '') {
+      if (closeTime && closeTime.trim() !== '') {
         const deadlineMs = new Date(closeTime).getTime();
         if (Date.now() >= deadlineMs) {
-          if (timerRef.current) clearInterval(timerRef.current);
+          clearInterval(globalInterval);
           setWarningModalMessage('SESSION EXPIRED: The official closing time for this exam has been reached.');
           setWarningModalOpen(true);
           handleSubmitQuiz('Timer Expired', true);
@@ -973,57 +974,61 @@ export const QuizHub: React.FC = () => {
         }
       }
 
-      // Absolute Time Calculation
+      // 2. Absolute Time Calculation
       const startMs = new Date(exactStartTime).getTime();
       const elapsedSeconds = Math.floor((Date.now() - startMs) / 1000);
-      const totalAllowedSeconds = activeQuiz.timeLimit * 60;
-      const remaining = Math.max(0, totalAllowedSeconds - elapsedSeconds);
+      const remaining = Math.max(0, (activeQuiz.timeLimit * 60) - elapsedSeconds);
       setTimeLeft(remaining);
 
-      // Standard Timeout
+      // 3. Standard Timeout
       if (remaining <= 0) {
-        if (timerRef.current) clearInterval(timerRef.current);
+        clearInterval(globalInterval);
         handleSubmitQuiz('Timer Expired', true);
       }
     }, 1000);
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+    return () => clearInterval(globalInterval);
   }, [isQuizStarted, exactStartTime, activeQuiz, handleSubmitQuiz]);
 
-  // 4.1 Time Starvation / Per-Question Timer Logic
+  // 4.1 Per-Question Timer (Strict & Stable)
+  
+  // A. Sync timer when question changes
   useEffect(() => {
-    if (!isQuizStarted || !activeQuiz?.perQuestionTimer || !activeQuiz?.timePerQuestionSeconds) {
+    if (isQuizStarted && activeQuiz?.perQuestionTimer && activeQuiz?.timePerQuestionSeconds) {
+      setQuestionTimer(activeQuiz.timePerQuestionSeconds);
+    } else {
       setQuestionTimer(null);
-      return;
     }
-    setQuestionTimer(activeQuiz.timePerQuestionSeconds);
   }, [isQuizStarted, activeQuiz, currentQuestionIdx]);
 
+  // B. Safe interval loop (No dependencies on state)
   useEffect(() => {
-    if (questionTimer === null || !isQuizStarted || isQuestionMutationsLocked) return;
+    if (!isQuizStarted || isQuestionMutationsLocked || !activeQuiz?.perQuestionTimer) return;
 
-    if (questionTimer <= 0) {
-      if (questionTimerRef.current) clearInterval(questionTimerRef.current);
-      
-      // Auto-submit current answer (or lack thereof) and move to next question
+    const qInterval = setInterval(() => {
+      setQuestionTimer((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          clearInterval(qInterval);
+          return 0; // Trigger auto-skip safely
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(qInterval);
+  }, [isQuizStarted, isQuestionMutationsLocked, activeQuiz, currentQuestionIdx]);
+
+  // C. Execution logic when timer hits zero
+  useEffect(() => {
+    if (questionTimer === 0 && isQuizStarted && !isSubmittingRef.current) {
       if (currentQuestionIdx < quizQuestions.length - 1) {
         setCurrentQuestionIdx((p) => p + 1);
       } else {
         handleSubmitQuiz('Submitted');
       }
-      return;
     }
-
-    questionTimerRef.current = setInterval(() => {
-      setQuestionTimer((prev) => (prev !== null ? prev - 1 : null));
-    }, 1000);
-
-    return () => {
-      if (questionTimerRef.current) clearInterval(questionTimerRef.current);
-    };
-  }, [questionTimer, isQuizStarted, isQuestionMutationsLocked, currentQuestionIdx, quizQuestions.length, handleSubmitQuiz]);
+  }, [questionTimer, isQuizStarted, currentQuestionIdx, quizQuestions.length, handleSubmitQuiz]);
 
   // 4.5 Listen for Admin Remote Override (forceLocked)
   useEffect(() => {

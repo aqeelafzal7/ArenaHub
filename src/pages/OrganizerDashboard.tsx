@@ -581,6 +581,9 @@ export const OrganizerDashboard: React.FC = () => {
       setOpenAt(formatIsoForDatetimeLocal(selectedQuiz.openAt));
       setCloseAt(formatIsoForDatetimeLocal(selectedQuiz.closeAt));
       setPostSubmissionText(selectedQuiz.postSubmissionText ?? "");
+      setIsPerQuestionTimer(selectedQuiz.perQuestionTimer || false);
+      setTimePerQuestionSeconds(selectedQuiz.timePerQuestionSeconds || 15);
+      setQuizTimeLimit(selectedQuiz.timeLimit || 15);
 
       // Fetch selected quiz questions
       const fetchQuestions = async () => {
