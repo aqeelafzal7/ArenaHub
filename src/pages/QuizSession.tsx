@@ -36,6 +36,8 @@ import {
   CornerDownLeft,
   BookOpen,
   RefreshCw,
+  WifiOff,
+  Wifi,
 } from "lucide-react";
 import { motion } from "motion/react";
 import * as tf from "@tensorflow/tfjs";
@@ -216,6 +218,10 @@ export const QuizSession: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("Loading assessment...");
   const [error, setError] = useState<string | null>(null);
+
+  // Network Connection Monitoring States
+  const [networkLatency, setNetworkLatency] = useState<number | null>(null);
+  const [isPoorConnection, setIsPoorConnection] = useState<boolean>(false);
 
   // Legal-Grade Telemetry States
   const [ipAddress, setIpAddress] = useState<string>("Fetching...");
@@ -542,9 +548,40 @@ export const QuizSession: React.FC = () => {
         try {
           setCameraStatus("Requesting...");
           const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
+            video: {
+              width: { ideal: 640, max: 640 },
+              height: { ideal: 360, max: 480 },
+              frameRate: { ideal: 15, max: 15 },
+            },
             audio: true,
           });
+
+          // Virtual Camera (OBS/ManyCam) Detection
+          const videoTrack = mediaStream.getVideoTracks()[0];
+          if (videoTrack) {
+            const deviceLabel = (videoTrack.label || "").toLowerCase();
+            const suspiciousKeywords = [
+              "virtual",
+              "obs",
+              "manycam",
+              "capture",
+              "splitcam",
+            ];
+
+            if (
+              suspiciousKeywords.some((keyword) =>
+                deviceLabel.includes(keyword),
+              )
+            ) {
+              const logMsg = `AI Flag: Hardware Spoofing Detected (${videoTrack.label})`;
+              if (activeAttemptId) {
+                updateDoc(doc(db, "attempts", activeAttemptId), {
+                  cheatFlags: arrayUnion(logMsg),
+                  updatedAt: serverTimestamp(),
+                }).catch(console.error);
+              }
+            }
+          }
 
           let options: any = { mimeType: "video/webm;codecs=vp9,opus" };
           if (!MediaRecorder.isTypeSupported(options.mimeType)) {
@@ -862,6 +899,76 @@ export const QuizSession: React.FC = () => {
     };
   }, [isQuizStarted, activeAttemptId, quizQuestions, currentQuestionIdx]);
 
+  // Hardware & Display Auditing on Quiz Start (Silent Alarms)
+  useEffect(() => {
+    if (!isQuizStarted || !activeAttemptId) return;
+
+    // 1. Virtual Camera check on active video track
+    if (streamRef.current) {
+      const videoTrack = streamRef.current.getVideoTracks()[0];
+      if (videoTrack) {
+        const deviceLabel = (videoTrack.label || "").toLowerCase();
+        const suspiciousKeywords = [
+          "virtual",
+          "obs",
+          "manycam",
+          "capture",
+          "splitcam",
+        ];
+
+        if (
+          suspiciousKeywords.some((keyword) => deviceLabel.includes(keyword))
+        ) {
+          const logMsg = `AI Flag: Hardware Spoofing Detected (${videoTrack.label})`;
+          updateDoc(doc(db, "attempts", activeAttemptId), {
+            cheatFlags: arrayUnion(logMsg),
+            updatedAt: serverTimestamp(),
+          }).catch(console.error);
+        }
+      }
+    }
+
+    // 2. External Display Detection (Silent Alarm)
+    if ("isExtended" in window.screen && (window.screen as any).isExtended) {
+      const logMsg = `AI Flag: Multiple Monitors/Extended Display Detected`;
+      updateDoc(doc(db, "attempts", activeAttemptId), {
+        cheatFlags: arrayUnion(logMsg),
+        updatedAt: serverTimestamp(),
+      }).catch(console.error);
+    }
+  }, [isQuizStarted, activeAttemptId]);
+
+  // Periodic Network Latency Monitor (Firestore ping)
+  useEffect(() => {
+    if (!isQuizStarted || !activeQuiz) return;
+
+    let isMounted = true;
+    const checkLatency = async () => {
+      try {
+        const start = performance.now();
+        // Ping Firestore by fetching active quiz document metadata
+        await getDoc(doc(db, "quizzes", activeQuiz.id));
+        const rtt = Math.round(performance.now() - start);
+        if (!isMounted) return;
+        setNetworkLatency(rtt);
+        setIsPoorConnection(rtt > 1000);
+      } catch (err) {
+        if (!isMounted) return;
+        setIsPoorConnection(true);
+      }
+    };
+
+    // Initial check
+    checkLatency();
+    // Periodically ping every 6 seconds during the quiz session
+    const latencyInterval = setInterval(checkLatency, 6000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(latencyInterval);
+    };
+  }, [isQuizStarted, activeQuiz?.id]);
+
   // 4. Timer effect & Scheduled window breach check
   useEffect(() => {
     if (!isQuizStarted || !activeQuiz) return;
@@ -1099,6 +1206,26 @@ export const QuizSession: React.FC = () => {
 
               {/* Timer & Refresh widget */}
               <div className="flex items-center gap-2">
+                {/* Non-intrusive Poor Connection status indicator */}
+                {isPoorConnection && (
+                  <div
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-600 text-xs font-bold animate-pulse shadow-xs"
+                    title={
+                      networkLatency
+                        ? `Connection Latency: ${networkLatency}ms (High Round-Trip Time)`
+                        : "High network latency detected"
+                    }
+                  >
+                    <WifiOff className="h-3.5 w-3.5 shrink-0" />
+                    <span className="hidden sm:inline">Poor Connection</span>
+                    {networkLatency !== null && (
+                      <span className="font-mono text-[11px] opacity-85">
+                        {networkLatency}ms
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 <button
                   onClick={handleSoftRefresh}
                   title="Soft Refresh Room"
