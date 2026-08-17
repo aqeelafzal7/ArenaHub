@@ -88,6 +88,85 @@ function shuffleArray<T>(array: T[]): T[] {
 
 const GAS_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzYw0GXrK2VPraB_fh3lT0gJr2EXF53I9HMKP0rkWN-rG_NTYfdXIzUfP-nwT9ftHoE/exec';
 
+// Securely load keys from environment variables
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = import.meta.env.VITE_GOOGLE_CLIENT_SECRET;
+const GOOGLE_REFRESH_TOKEN = import.meta.env.VITE_GOOGLE_REFRESH_TOKEN;
+const GOOGLE_DRIVE_FOLDER_ID = import.meta.env.VITE_GOOGLE_DRIVE_FOLDER_ID;
+
+// Helper to get a fresh Access Token using the permanent Refresh Token
+async function getFreshAccessToken(): Promise<string | null> {
+  try {
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: GOOGLE_REFRESH_TOKEN,
+        grant_type: 'refresh_token',
+      }),
+    });
+    const data = await response.json();
+    return data.access_token || null;
+  } catch (err) {
+    console.error('Failed to refresh Google Drive access token:', err);
+    return null;
+  }
+}
+
+// Direct multipart video upload to Google Drive with automatic read permissions
+async function uploadVideoToDrive(videoBlob: Blob, filename: string): Promise<string | null> {
+  try {
+    const accessToken = await getFreshAccessToken();
+    if (!accessToken) throw new Error('No access token obtained');
+
+    // 1. Multipart Upload
+    const metadata = {
+      name: filename,
+      parents: [GOOGLE_DRIVE_FOLDER_ID],
+      mimeType: videoBlob.type || 'video/webm'
+    };
+
+    const formData = new FormData();
+    formData.append(
+      'metadata',
+      new Blob([JSON.stringify(metadata)], { type: 'application/json' })
+    );
+    formData.append('file', videoBlob);
+
+    const uploadRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: formData,
+      }
+    );
+
+    const result = await uploadRes.json();
+    if (!result.id) throw new Error('Upload failed to return file ID');
+
+    // 2. Grant Read Permissions (Anyone with link)
+    await fetch(`https://www.googleapis.com/drive/v3/files/${result.id}/permissions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        role: 'reader',
+        type: 'anyone',
+      }),
+    });
+
+    return `https://drive.google.com/file/d/${result.id}/view`;
+  } catch (error) {
+    console.error('Drive upload/permission assignment error:', error);
+    return null;
+  }
+}
+
 const SUSPICIOUS_KEYWORDS = [
   // English
   'answer', 'question', 'search', 'google', 'chat gpt', 'tell me', 'what is', 'option',
@@ -178,6 +257,7 @@ export const QuizHub: React.FC = () => {
   const compulsoryShotsTakenRef = useRef(0);
   const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<any>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
   const isListeningRef = useRef(false);
   const speechThrottleRef = useRef<number>(0);
 
@@ -604,6 +684,28 @@ export const QuizHub: React.FC = () => {
       const currentFlags = [...cheatFlagsRef.current];
       const finalAnswers = { ...answers };
 
+      // Stop media recorder and assemble video blob for Google Drive upload
+      let driveViewUrl: string | null = null;
+      if (mediaRecorderRef.current) {
+        try {
+          if (mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.stop();
+          }
+        } catch (recErr) {
+          console.warn('Error stopping MediaRecorder:', recErr);
+        }
+      }
+
+      if (recordedChunksRef.current && recordedChunksRef.current.length > 0) {
+        try {
+          const fullVideoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+          const recordingFilename = `${profile?.name || 'Candidate'}_${activeAttemptId}_Recording.webm`;
+          driveViewUrl = await uploadVideoToDrive(fullVideoBlob, recordingFilename);
+        } catch (uploadErr) {
+          console.error('Failed to upload exam video recording to Google Drive:', uploadErr);
+        }
+      }
+
       const finalAttemptData: Attempt = {
         id: activeAttemptId,
         hubId: activeHub?.id || '',
@@ -622,12 +724,13 @@ export const QuizHub: React.FC = () => {
         deviceInfo: deviceInfo,
         startedAt: exactStartTime,
         submittedAt: new Date().toISOString(),
+        recordingUrl: driveViewUrl || undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
       // Write final attempt evaluation
-      await updateDoc(attemptDocRef, {
+      const updatePayload: any = {
         score: finalScore,
         timeSpentSeconds: secondsConsumed,
         passed: isPassed,
@@ -638,7 +741,13 @@ export const QuizHub: React.FC = () => {
         startedAt: exactStartTime,
         submittedAt: new Date().toISOString(),
         updatedAt: serverTimestamp()
-      });
+      };
+
+      if (driveViewUrl) {
+        updatePayload.recordingUrl = driveViewUrl;
+      }
+
+      await updateDoc(attemptDocRef, updatePayload);
 
       localStorage.removeItem('arena_active_session');
       localStorage.removeItem('arena_saved_answers');
@@ -713,7 +822,13 @@ export const QuizHub: React.FC = () => {
           }
           const mediaRecorder = new MediaRecorder(mediaStream, options);
           mediaRecorderRef.current = mediaRecorder;
-          mediaRecorder.start();
+          recordedChunksRef.current = [];
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              recordedChunksRef.current.push(event.data);
+            }
+          };
+          mediaRecorder.start(1000);
 
           setAndRefStream(mediaStream);
           setCameraStatus('Active');

@@ -79,6 +79,7 @@ export interface Attempt {
   deviceInfo?: string;
   startedAt?: string;
   submittedAt?: string;
+  recordingUrl?: string;
   createdAt: any;
   updatedAt: any;
 }
