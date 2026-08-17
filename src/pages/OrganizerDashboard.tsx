@@ -2476,16 +2476,38 @@ export const OrganizerDashboard: React.FC = () => {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-brand-border">
-                            {liveAttempts.map((attempt) => {
+                            {[...liveAttempts]
+                              .sort((a, b) => {
+                                const aSus = (a.cheatFlags?.length || 0) > 0 ? 1 : 0;
+                                const bSus = (b.cheatFlags?.length || 0) > 0 ? 1 : 0;
+                                if (aSus !== bSus) return bSus - aSus; // Suspicious profiles forced to the top
+                                return b.score - a.score; // Safe profiles sorted by highest score below
+                              })
+                              .map((attempt) => {
                               const seconds = attempt.timeSpentSeconds;
                               const min = Math.floor(seconds / 60);
                               const sec = seconds % 60;
                               const timeStr = `${min}:${sec < 10 ? "0" : ""}${sec}`;
 
+                              const handleKillSwitch = async (attemptId: string) => {
+                                if (window.confirm("CRITICAL: Instantly terminate this student's exam?")) {
+                                  try {
+                                    await updateDoc(doc(db, 'attempts', attemptId), {
+                                      forceLocked: true,
+                                      status: 'Locked Out',
+                                      cheatFlags: arrayUnion('Manually Terminated by Admin')
+                                    });
+                                  } catch (err: any) {
+                                    console.error('Failed to terminate session:', err);
+                                    alert('Error force-terminating session: ' + err.message);
+                                  }
+                                }
+                              };
+
                               return (
                                 <tr
                                   key={attempt.id}
-                                  className="hover:bg-brand-bg/20 transition-colors"
+                                  className="hover:bg-brand-bg/20 transition-colors align-top"
                                 >
                                   <td className="px-6 py-4">
                                     <div>
@@ -2495,6 +2517,22 @@ export const OrganizerDashboard: React.FC = () => {
                                       <span className="text-[10px] text-brand-muted block mt-0.5">
                                         {attempt.userEmail}
                                       </span>
+
+                                      {/* Embedded Video Auditing (Google Drive Iframe) */}
+                                      {attempt.recordingUrl && (
+                                        <div className="mt-4">
+                                          <h4 className="text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                                            <span>📹</span> Session Video Recording
+                                          </h4>
+                                          <iframe
+                                            src={attempt.recordingUrl.replace('/view', '/preview')}
+                                            width="100%"
+                                            height="200"
+                                            allow="autoplay"
+                                            className="rounded-lg border-2 border-slate-300 bg-slate-100 min-w-[240px]"
+                                          />
+                                        </div>
+                                      )}
                                     </div>
                                   </td>
 
@@ -2557,67 +2595,52 @@ export const OrganizerDashboard: React.FC = () => {
                                   </td>
 
                                   <td className="px-6 py-4">
-                                    {attempt.cheatFlags.length === 0 ? (
+                                    {(!attempt.cheatFlags || attempt.cheatFlags.length === 0) ? (
                                       <span className="text-[10px] text-green-600 font-bold flex items-center gap-1">
                                         <Check className="h-3.5 w-3.5" /> Secure
                                         Environment
                                       </span>
                                     ) : (
-                                      <div className="flex flex-wrap gap-1 max-w-xs">
-                                        {attempt.cheatFlags.map(
-                                          (flag, fIdx) => (
-                                            <span
-                                              key={fIdx}
-                                              className="text-[9px] bg-red-100 text-red-800 font-black px-1.5 py-0.5 rounded border border-red-200 flex items-center gap-1"
-                                            >
-                                              <ShieldAlert className="h-2.5 w-2.5 text-red-600 shrink-0" />
-                                              {parseProctorFlag(flag)}
-                                            </span>
-                                          ),
-                                        )}
+                                      <div className="space-y-2">
+                                        <div className="flex flex-wrap gap-1 max-w-xs">
+                                          {attempt.cheatFlags.map(
+                                            (flag, fIdx) => (
+                                              <span
+                                                key={fIdx}
+                                                className="text-[9px] bg-red-100 text-red-800 font-black px-1.5 py-0.5 rounded border border-red-200 flex items-center gap-1"
+                                              >
+                                                <ShieldAlert className="h-2.5 w-2.5 text-red-600 shrink-0" />
+                                                {parseProctorFlag(flag)}
+                                              </span>
+                                            ),
+                                          )}
+                                        </div>
+
+                                        {/* Incident Log Breakdown (Expandable Detail Cards) */}
+                                        <details className="mt-2 bg-red-50 p-3 rounded-xl border border-red-200 cursor-pointer text-left max-w-xs">
+                                          <summary className="text-red-700 font-bold uppercase tracking-wider text-[10px]">
+                                            View Security Incidents ({attempt.cheatFlags.length})
+                                          </summary>
+                                          <ul className="mt-2 text-[11px] text-red-900 space-y-1.5 font-mono">
+                                            {attempt.cheatFlags.map((flag, idx) => (
+                                              <li key={idx} className="border-b border-red-200/60 pb-1.5 leading-relaxed break-words">
+                                                {flag}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </details>
                                       </div>
                                     )}
                                   </td>
 
                                   <td className="px-6 py-4">
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
                                       {attempt.status === "In Progress" ? (
                                         <button
-                                          onClick={async () => {
-                                            if (
-                                              confirm(
-                                                "Are you sure you want to terminate this student's exam?",
-                                              )
-                                            ) {
-                                              try {
-                                                await updateDoc(
-                                                  doc(
-                                                    db,
-                                                    "attempts",
-                                                    attempt.id,
-                                                  ),
-                                                  {
-                                                    forceLocked: true,
-                                                    cheatFlags: arrayUnion(
-                                                      "Manually Terminated by Admin",
-                                                    ),
-                                                  },
-                                                );
-                                              } catch (err: any) {
-                                                console.error(
-                                                  "Failed to terminate session:",
-                                                  err,
-                                                );
-                                                alert(
-                                                  "Error force-terminating session: " +
-                                                    err.message,
-                                                );
-                                              }
-                                            }
-                                          }}
+                                          onClick={() => handleKillSwitch(attempt.id)}
                                           className="bg-red-600 hover:bg-red-700 text-white font-extrabold px-3 py-1.5 rounded text-[11px] shadow-xs cursor-pointer transition-colors"
                                         >
-                                          Force Terminate
+                                          Terminate Session
                                         </button>
                                       ) : (
                                         <span className="text-brand-muted font-bold text-[11px]">
