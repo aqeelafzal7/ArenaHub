@@ -2595,6 +2595,23 @@ export const OrganizerDashboard: React.FC = () => {
                                   </td>
 
                                   <td className="px-6 py-4">
+                                    {/* Video Player Button */}
+                                    {attempt.recordingUrl && (
+                                      <div className="mt-1 mb-2">
+                                        <a 
+                                          href={attempt.recordingUrl} 
+                                          target="_blank" 
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition-colors shadow-xs cursor-pointer"
+                                        >
+                                          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                          </svg>
+                                          Watch Full Session Video
+                                        </a>
+                                      </div>
+                                    )}
+
                                     {(!attempt.cheatFlags || attempt.cheatFlags.length === 0) ? (
                                       <span className="text-[10px] text-green-600 font-bold flex items-center gap-1">
                                         <Check className="h-3.5 w-3.5" /> Secure

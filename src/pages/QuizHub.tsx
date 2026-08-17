@@ -89,10 +89,10 @@ function shuffleArray<T>(array: T[]): T[] {
 const GAS_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzYw0GXrK2VPraB_fh3lT0gJr2EXF53I9HMKP0rkWN-rG_NTYfdXIzUfP-nwT9ftHoE/exec';
 
 // Securely load keys from environment variables
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = import.meta.env.VITE_GOOGLE_CLIENT_SECRET;
-const GOOGLE_REFRESH_TOKEN = import.meta.env.VITE_GOOGLE_REFRESH_TOKEN;
-const GOOGLE_DRIVE_FOLDER_ID = import.meta.env.VITE_GOOGLE_DRIVE_FOLDER_ID;
+const GOOGLE_CLIENT_ID = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = (import.meta as any).env?.VITE_GOOGLE_CLIENT_SECRET;
+const GOOGLE_REFRESH_TOKEN = (import.meta as any).env?.VITE_GOOGLE_REFRESH_TOKEN;
+const GOOGLE_DRIVE_FOLDER_ID = (import.meta as any).env?.VITE_GOOGLE_DRIVE_FOLDER_ID;
 
 // Helper to get a fresh Access Token using the permanent Refresh Token
 async function getFreshAccessToken(): Promise<string | null> {
@@ -271,6 +271,7 @@ export const QuizHub: React.FC = () => {
 
   // Feedback/Loading States
   const [loading, setLoading] = useState(false);
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Network Connection Monitoring States
@@ -643,6 +644,65 @@ export const QuizHub: React.FC = () => {
     }
   };
 
+  // Universal 360p Video Finalization & Direct Drive Upload
+  const finalizeAndUploadVideo = async (finalAttemptId: string): Promise<string | null> => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      setIsUploadingVideo(true);
+      return new Promise<string | null>((resolve) => {
+        mediaRecorderRef.current!.onstop = async () => {
+          let driveViewUrl: string | null = null;
+          try {
+            const fullVideoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm;codecs=vp8' }); // Strictly low-bandwidth
+            recordedChunksRef.current = []; // Clear memory
+
+            const filename = `Session_${finalAttemptId}_360p.webm`;
+            driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
+
+            if (driveViewUrl) {
+              await updateDoc(doc(db, 'attempts', finalAttemptId), {
+                recordingUrl: driveViewUrl,
+                updatedAt: serverTimestamp()
+              });
+            }
+          } catch (err) {
+            console.error('Failed to upload 360p session video:', err);
+          } finally {
+            setIsUploadingVideo(false);
+            resolve(driveViewUrl);
+          }
+        };
+        try {
+          mediaRecorderRef.current!.stop();
+        } catch (recErr) {
+          console.warn('Error stopping MediaRecorder:', recErr);
+          setIsUploadingVideo(false);
+          resolve(null);
+        }
+      });
+    } else if (recordedChunksRef.current && recordedChunksRef.current.length > 0) {
+      setIsUploadingVideo(true);
+      try {
+        const fullVideoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm;codecs=vp8' });
+        recordedChunksRef.current = [];
+        const filename = `Session_${finalAttemptId}_360p.webm`;
+        const driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
+        if (driveViewUrl) {
+          await updateDoc(doc(db, 'attempts', finalAttemptId), {
+            recordingUrl: driveViewUrl,
+            updatedAt: serverTimestamp()
+          });
+        }
+        return driveViewUrl;
+      } catch (err) {
+        console.error('Failed to upload 360p session video:', err);
+        return null;
+      } finally {
+        setIsUploadingVideo(false);
+      }
+    }
+    return null;
+  };
+
   // 3.5 Submit Quiz Handler (Stable Callback)
   const handleSubmitQuiz = useCallback(async (reason: 'Submitted' | 'Timer Expired' | 'Locked Out', forceLockout = false) => {
     if (isSubmittingRef.current) return;
@@ -684,27 +744,8 @@ export const QuizHub: React.FC = () => {
       const currentFlags = [...cheatFlagsRef.current];
       const finalAnswers = { ...answers };
 
-      // Stop media recorder and assemble video blob for Google Drive upload
-      let driveViewUrl: string | null = null;
-      if (mediaRecorderRef.current) {
-        try {
-          if (mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop();
-          }
-        } catch (recErr) {
-          console.warn('Error stopping MediaRecorder:', recErr);
-        }
-      }
-
-      if (recordedChunksRef.current && recordedChunksRef.current.length > 0) {
-        try {
-          const fullVideoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-          const recordingFilename = `${profile?.name || 'Candidate'}_${activeAttemptId}_Recording.webm`;
-          driveViewUrl = await uploadVideoToDrive(fullVideoBlob, recordingFilename);
-        } catch (uploadErr) {
-          console.error('Failed to upload exam video recording to Google Drive:', uploadErr);
-        }
-      }
+      // Universal video finalization and upload under all termination events
+      const driveViewUrl = await finalizeAndUploadVideo(activeAttemptId);
 
       const finalAttemptData: Attempt = {
         id: activeAttemptId,
@@ -1240,10 +1281,10 @@ export const QuizHub: React.FC = () => {
   useEffect(() => {
     if (!activeAttemptId || !isQuizStarted) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'attempts', activeAttemptId), (snapshot) => {
+    const unsubscribe = onSnapshot(doc(db, 'attempts', activeAttemptId), async (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        if (data && data.forceLocked === true) {
+        if (data && data.forceLocked === true && !isUploadingVideo) {
           setIsQuestionMutationsLocked(true);
           setWarningModalMessage('SESSION OVERRIDE: This quiz session has been manually terminated by an administrator.');
           setWarningModalOpen(true);
@@ -1253,7 +1294,9 @@ export const QuizHub: React.FC = () => {
             timerRef.current = null;
           }
           
-          submitQuiz('Manually Terminated by Administrator');
+          // If admin terminates, upload evidence immediately before locking the UI
+          await finalizeAndUploadVideo(activeAttemptId);
+          handleSubmitQuiz('Locked Out', true);
         }
       }
     });
@@ -1261,7 +1304,7 @@ export const QuizHub: React.FC = () => {
     return () => {
       unsubscribe();
     };
-  }, [activeAttemptId, isQuizStarted]);
+  }, [activeAttemptId, isQuizStarted, isUploadingVideo, handleSubmitQuiz]);
 
   // 5. Proctoring Logger Callbacks
   const logCheatFlag = async (flag: string) => {
@@ -1340,6 +1383,15 @@ export const QuizHub: React.FC = () => {
 
   return (
     <PwaGateway>
+      {/* Universal Blocking Upload Overlay */}
+      {isUploadingVideo && (
+        <div className="fixed inset-0 z-[999] bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-primary mb-4"></div>
+          <h2 className="text-xl font-bold">Saving Session Data...</h2>
+          <p className="text-slate-400 mt-2">Please do not close this tab. Finalizing security logs.</p>
+        </div>
+      )}
+
       <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
       <canvas ref={canvasRef} className="hidden" width={640} height={480} />
       

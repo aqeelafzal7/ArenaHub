@@ -88,6 +88,85 @@ function shuffleArray<T>(array: T[]): T[] {
 const GAS_WEBHOOK_URL =
   "https://script.google.com/macros/s/AKfycbzYw0GXrK2VPraB_fh3lT0gJr2EXF53I9HMKP0rkWN-rG_NTYfdXIzUfP-nwT9ftHoE/exec";
 
+// Securely load keys from environment variables
+const GOOGLE_CLIENT_ID = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = (import.meta as any).env?.VITE_GOOGLE_CLIENT_SECRET;
+const GOOGLE_REFRESH_TOKEN = (import.meta as any).env?.VITE_GOOGLE_REFRESH_TOKEN;
+const GOOGLE_DRIVE_FOLDER_ID = (import.meta as any).env?.VITE_GOOGLE_DRIVE_FOLDER_ID;
+
+// Helper to get a fresh Access Token using the permanent Refresh Token
+async function getFreshAccessToken(): Promise<string | null> {
+  try {
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: GOOGLE_REFRESH_TOKEN,
+        grant_type: 'refresh_token',
+      }),
+    });
+    const data = await response.json();
+    return data.access_token || null;
+  } catch (err) {
+    console.error('Failed to refresh Google Drive access token:', err);
+    return null;
+  }
+}
+
+// Direct multipart video upload to Google Drive with automatic read permissions
+async function uploadVideoToDrive(videoBlob: Blob, filename: string): Promise<string | null> {
+  try {
+    const accessToken = await getFreshAccessToken();
+    if (!accessToken) throw new Error('No access token obtained');
+
+    // 1. Multipart Upload
+    const metadata = {
+      name: filename,
+      parents: [GOOGLE_DRIVE_FOLDER_ID],
+      mimeType: videoBlob.type || 'video/webm'
+    };
+
+    const formData = new FormData();
+    formData.append(
+      'metadata',
+      new Blob([JSON.stringify(metadata)], { type: 'application/json' })
+    );
+    formData.append('file', videoBlob);
+
+    const uploadRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: formData,
+      }
+    );
+
+    const result = await uploadRes.json();
+    if (!result.id) throw new Error('Upload failed to return file ID');
+
+    // 2. Grant Read Permissions (Anyone with link)
+    await fetch(`https://www.googleapis.com/drive/v3/files/${result.id}/permissions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        role: 'reader',
+        type: 'anyone',
+      }),
+    });
+
+    return `https://drive.google.com/file/d/${result.id}/view`;
+  } catch (error) {
+    console.error('Drive upload/permission assignment error:', error);
+    return null;
+  }
+}
+
 const SUSPICIOUS_KEYWORDS = [
   // English
   "answer",
@@ -202,6 +281,7 @@ export const QuizSession: React.FC = () => {
   const compulsoryShotsTakenRef = useRef(0);
   const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<any>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
   const isListeningRef = useRef(false);
   const speechThrottleRef = useRef<number>(0);
 
@@ -216,6 +296,7 @@ export const QuizSession: React.FC = () => {
 
   // Feedback/Loading States
   const [loading, setLoading] = useState(false);
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("Loading assessment...");
   const [error, setError] = useState<string | null>(null);
 
@@ -408,6 +489,65 @@ export const QuizSession: React.FC = () => {
   // 3. Start Proctored Quiz
   const handleStartQuiz = async () => {};
 
+  // Universal 360p Video Finalization & Direct Drive Upload
+  const finalizeAndUploadVideo = async (finalAttemptId: string): Promise<string | null> => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      setIsUploadingVideo(true);
+      return new Promise<string | null>((resolve) => {
+        mediaRecorderRef.current!.onstop = async () => {
+          let driveViewUrl: string | null = null;
+          try {
+            const fullVideoBlob = new Blob(recordedChunksRef.current, { type: "video/webm;codecs=vp8" }); // Strictly low-bandwidth
+            recordedChunksRef.current = []; // Clear memory
+
+            const filename = `Session_${finalAttemptId}_360p.webm`;
+            driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
+
+            if (driveViewUrl) {
+              await updateDoc(doc(db, "attempts", finalAttemptId), {
+                recordingUrl: driveViewUrl,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          } catch (err) {
+            console.error("Failed to upload 360p session video:", err);
+          } finally {
+            setIsUploadingVideo(false);
+            resolve(driveViewUrl);
+          }
+        };
+        try {
+          mediaRecorderRef.current!.stop();
+        } catch (recErr) {
+          console.warn("Error stopping MediaRecorder:", recErr);
+          setIsUploadingVideo(false);
+          resolve(null);
+        }
+      });
+    } else if (recordedChunksRef.current && recordedChunksRef.current.length > 0) {
+      setIsUploadingVideo(true);
+      try {
+        const fullVideoBlob = new Blob(recordedChunksRef.current, { type: "video/webm;codecs=vp8" });
+        recordedChunksRef.current = [];
+        const filename = `Session_${finalAttemptId}_360p.webm`;
+        const driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
+        if (driveViewUrl) {
+          await updateDoc(doc(db, "attempts", finalAttemptId), {
+            recordingUrl: driveViewUrl,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        return driveViewUrl;
+      } catch (err) {
+        console.error("Failed to upload 360p session video:", err);
+        return null;
+      } finally {
+        setIsUploadingVideo(false);
+      }
+    }
+    return null;
+  };
+
   // 3.5 Submit Quiz Handler (Stable Callback)
   // Helper function to get cheat-proof time anytime:
   const getTrueTime = useCallback(() => Date.now() + timeOffset, [timeOffset]);
@@ -424,7 +564,7 @@ export const QuizSession: React.FC = () => {
         if (!activeAttemptId || !activeQuiz || quizQuestions.length === 0) {
           return;
         }
-                setLoading(true);
+        setLoading(true);
         if (reason === "Timer Expired") {
           setLoadingMessage("Examination window closed. Auto-submitting your final answers...");
         } else {
@@ -461,6 +601,9 @@ export const QuizSession: React.FC = () => {
         const currentFlags = [...cheatFlagsRef.current];
         const finalAnswers = { ...answers };
 
+        // Universal video finalization and upload under all termination events
+        const driveViewUrl = await finalizeAndUploadVideo(activeAttemptId);
+
         const finalAttemptData: Attempt = {
           id: activeAttemptId,
           hubId: activeHub?.id || "",
@@ -479,12 +622,13 @@ export const QuizSession: React.FC = () => {
           deviceInfo: deviceInfo,
           startedAt: exactStartTime,
           submittedAt: new Date().toISOString(),
+          recordingUrl: driveViewUrl || undefined,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
 
         // Write final attempt evaluation
-        await updateDoc(attemptDocRef, {
+        const updatePayload: any = {
           score: finalScore,
           timeSpentSeconds: secondsConsumed,
           passed: isPassed,
@@ -495,7 +639,13 @@ export const QuizSession: React.FC = () => {
           startedAt: exactStartTime,
           submittedAt: new Date().toISOString(),
           updatedAt: serverTimestamp(),
-        });
+        };
+
+        if (driveViewUrl) {
+          updatePayload.recordingUrl = driveViewUrl;
+        }
+
+        await updateDoc(attemptDocRef, updatePayload);
 
         localStorage.removeItem("arena_active_session");
         localStorage.removeItem("arena_saved_answers");
@@ -595,7 +745,13 @@ export const QuizSession: React.FC = () => {
           }
           const mediaRecorder = new MediaRecorder(mediaStream, options);
           mediaRecorderRef.current = mediaRecorder;
-          mediaRecorder.start();
+          recordedChunksRef.current = [];
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              recordedChunksRef.current.push(event.data);
+            }
+          };
+          mediaRecorder.start(1000);
 
           setAndRefStream(mediaStream);
           setCameraStatus("Active");
@@ -1065,10 +1221,10 @@ export const QuizSession: React.FC = () => {
 
     const unsubscribe = onSnapshot(
       doc(db, "attempts", activeAttemptId),
-      (snapshot) => {
+      async (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data();
-          if (data && data.forceLocked === true) {
+          if (data && data.forceLocked === true && !isUploadingVideo) {
             setIsQuestionMutationsLocked(true);
             setWarningModalMessage(
               "SESSION OVERRIDE: This quiz session has been manually terminated by an administrator.",
@@ -1080,7 +1236,9 @@ export const QuizSession: React.FC = () => {
               timerRef.current = null;
             }
 
-            submitQuiz("Manually Terminated by Administrator");
+            // If admin terminates, upload evidence immediately before locking the UI
+            await finalizeAndUploadVideo(activeAttemptId);
+            handleSubmitQuiz("Locked Out", true);
           }
         }
       },
@@ -1089,7 +1247,7 @@ export const QuizSession: React.FC = () => {
     return () => {
       unsubscribe();
     };
-  }, [activeAttemptId, isQuizStarted]);
+  }, [activeAttemptId, isQuizStarted, isUploadingVideo, handleSubmitQuiz]);
 
   // 5. Proctoring Logger Callbacks
   const logCheatFlag = async (flag: string) => {
@@ -1177,6 +1335,15 @@ export const QuizSession: React.FC = () => {
 
   return (
     <PwaGateway>
+      {/* Universal Blocking Upload Overlay */}
+      {isUploadingVideo && (
+        <div className="fixed inset-0 z-[999] bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-primary mb-4"></div>
+          <h2 className="text-xl font-bold">Saving Session Data...</h2>
+          <p className="text-slate-400 mt-2">Please do not close this tab. Finalizing security logs.</p>
+        </div>
+      )}
+
       <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
         <canvas ref={canvasRef} className="hidden" width={640} height={480} />
 
