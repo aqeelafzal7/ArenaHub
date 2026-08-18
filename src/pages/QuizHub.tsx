@@ -239,8 +239,8 @@ export const QuizHub: React.FC = () => {
       const context = canvas.getContext('2d');
       if (!context) return null;
 
-      // Draw crisp 720p video stream frame onto hidden canvas
-      context.drawImage(videoRef.current, 0, 0, 1280, 720);
+      // Draw current video stream frame onto hidden canvas (480p)
+      context.drawImage(videoRef.current, 0, 0, 640, 480);
 
       // Convert to highly compressed, efficient JPEG text stream (0.6 quality)
       const base64Image = canvas.toDataURL('image/jpeg', 0.6);
@@ -691,7 +691,7 @@ export const QuizHub: React.FC = () => {
             const fullVideoBlob = new Blob(storedChunks, { type: 'video/webm;codecs=vp8' });
             
             // Aggressive bitrate compression
-            const filename = `Session_${finalAttemptId}_720p_Compressed.webm`;
+            const filename = `Session_${finalAttemptId}_480p_Compressed.webm`;
             driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
 
             if (driveViewUrl) {
@@ -722,7 +722,7 @@ export const QuizHub: React.FC = () => {
         const storedChunks = await getAllVaultChunks();
         if (storedChunks && storedChunks.length > 0) {
           const fullVideoBlob = new Blob(storedChunks, { type: 'video/webm;codecs=vp8' });
-          const filename = `Session_${finalAttemptId}_720p_Compressed.webm`;
+          const filename = `Session_${finalAttemptId}_480p_Compressed.webm`;
           const driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
           if (driveViewUrl) {
             await updateDoc(doc(db, 'attempts', finalAttemptId), {
@@ -866,7 +866,11 @@ export const QuizHub: React.FC = () => {
         try {
           setCameraStatus('Requesting...');
           const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 5, max: 5 } },
+            video: { 
+              width: { ideal: 640, max: 854 }, 
+              height: { ideal: 480, max: 480 }, 
+              frameRate: { ideal: 5, max: 5 } 
+            },
             audio: true
           });
 
@@ -897,16 +901,15 @@ export const QuizHub: React.FC = () => {
           
           await clearVault();
 
-          let options: any = { mimeType: 'video/webm;codecs=vp8,opus' };
-          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-            options = { mimeType: 'video/webm' };
-            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-              options = { mimeType: 'video/mp4' };
-              if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-                options = { mimeType: '' }; // Let browser decide
-              }
-            }
-          }
+          let options: any = {
+            mimeType: MediaRecorder.isTypeSupported('video/webm;codecs=vp8') 
+              ? 'video/webm;codecs=vp8' 
+              : (MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : ''),
+            videoBitsPerSecond: 100000 // Strictly compress to 100 kbps
+          };
+          if (!options.mimeType) delete options.mimeType;
+
+          // Initialize the MediaRecorder with explicit compression limits
           const mediaRecorder = new MediaRecorder(mediaStream, options);
           mediaRecorderRef.current = mediaRecorder;
           mediaRecorder.ondataavailable = async (event) => {
@@ -1438,7 +1441,7 @@ export const QuizHub: React.FC = () => {
       )}
 
       <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
-      <canvas ref={canvasRef} className="hidden" width={1280} height={720} />
+      <canvas ref={canvasRef} className="hidden" width={640} height={480} />
       
       {/* 1. PORTAL ACCESS (HUB ENTRY SCREEN) */}
       {!activeHub && !finalAttempt && (
