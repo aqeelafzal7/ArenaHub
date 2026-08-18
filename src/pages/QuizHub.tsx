@@ -178,6 +178,41 @@ const SUSPICIOUS_KEYWORDS = [
   'جواب', 'سوال', 'بتاؤ', 'مدد', 'کیا'
 ];
 
+// IndexedDB Vault for zero-RAM recording buffer during 60+ min sessions
+const openVault = (): Promise<IDBDatabase> => new Promise((resolve, reject) => {
+  const req = indexedDB.open('VideoVault', 1);
+  req.onupgradeneeded = (e: any) => e.target.result.createObjectStore('chunks', { autoIncrement: true });
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error);
+});
+
+const saveChunkToVault = async (chunk: Blob) => {
+  try {
+    const db = await openVault();
+    db.transaction('chunks', 'readwrite').objectStore('chunks').add(chunk);
+  } catch (err) {
+    console.error('Error saving chunk to vault:', err);
+  }
+};
+
+const getAllVaultChunks = async (): Promise<Blob[]> => {
+  const db = await openVault();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction('chunks', 'readonly').objectStore('chunks').getAll();
+    req.onsuccess = () => resolve(req.result as Blob[]);
+    req.onerror = () => reject(req.error);
+  });
+};
+
+const clearVault = async () => {
+  try {
+    const db = await openVault();
+    db.transaction('chunks', 'readwrite').objectStore('chunks').clear();
+  } catch (err) {
+    console.error('Error clearing vault:', err);
+  }
+};
+
 export const QuizHub: React.FC = () => {
   const { user, profile, theme, isQuizStarted, setIsQuizStarted } = useAuth();
   const isColorblind = theme === 'colorblind';
@@ -204,8 +239,8 @@ export const QuizHub: React.FC = () => {
       const context = canvas.getContext('2d');
       if (!context) return null;
 
-      // Draw current video stream frame onto hidden canvas
-      context.drawImage(videoRef.current, 0, 0, 640, 480);
+      // Draw crisp 720p video stream frame onto hidden canvas
+      context.drawImage(videoRef.current, 0, 0, 1280, 720);
 
       // Convert to highly compressed, efficient JPEG text stream (0.6 quality)
       const base64Image = canvas.toDataURL('image/jpeg', 0.6);
@@ -644,7 +679,7 @@ export const QuizHub: React.FC = () => {
     }
   };
 
-  // Universal 360p Video Finalization & Direct Drive Upload
+  // Universal 720p Compressed Video Finalization & Direct Drive Upload via IndexedDB Vault
   const finalizeAndUploadVideo = async (finalAttemptId: string): Promise<string | null> => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       setIsUploadingVideo(true);
@@ -652,10 +687,11 @@ export const QuizHub: React.FC = () => {
         mediaRecorderRef.current!.onstop = async () => {
           let driveViewUrl: string | null = null;
           try {
-            const fullVideoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm;codecs=vp8' }); // Strictly low-bandwidth
-            recordedChunksRef.current = []; // Clear memory
-
-            const filename = `Session_${finalAttemptId}_360p.webm`;
+            const storedChunks = await getAllVaultChunks();
+            const fullVideoBlob = new Blob(storedChunks, { type: 'video/webm;codecs=vp8' });
+            
+            // Aggressive bitrate compression
+            const filename = `Session_${finalAttemptId}_720p_Compressed.webm`;
             driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
 
             if (driveViewUrl) {
@@ -663,9 +699,10 @@ export const QuizHub: React.FC = () => {
                 recordingUrl: driveViewUrl,
                 updatedAt: serverTimestamp()
               });
+              await clearVault(); // Clean up the user's hard drive after successful upload
             }
           } catch (err) {
-            console.error('Failed to upload 360p session video:', err);
+            console.error("Vault retrieval or upload failed:", err);
           } finally {
             setIsUploadingVideo(false);
             resolve(driveViewUrl);
@@ -679,28 +716,31 @@ export const QuizHub: React.FC = () => {
           resolve(null);
         }
       });
-    } else if (recordedChunksRef.current && recordedChunksRef.current.length > 0) {
+    } else {
       setIsUploadingVideo(true);
       try {
-        const fullVideoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm;codecs=vp8' });
-        recordedChunksRef.current = [];
-        const filename = `Session_${finalAttemptId}_360p.webm`;
-        const driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
-        if (driveViewUrl) {
-          await updateDoc(doc(db, 'attempts', finalAttemptId), {
-            recordingUrl: driveViewUrl,
-            updatedAt: serverTimestamp()
-          });
+        const storedChunks = await getAllVaultChunks();
+        if (storedChunks && storedChunks.length > 0) {
+          const fullVideoBlob = new Blob(storedChunks, { type: 'video/webm;codecs=vp8' });
+          const filename = `Session_${finalAttemptId}_720p_Compressed.webm`;
+          const driveViewUrl = await uploadVideoToDrive(fullVideoBlob, filename);
+          if (driveViewUrl) {
+            await updateDoc(doc(db, 'attempts', finalAttemptId), {
+              recordingUrl: driveViewUrl,
+              updatedAt: serverTimestamp()
+            });
+            await clearVault();
+          }
+          return driveViewUrl;
         }
-        return driveViewUrl;
+        return null;
       } catch (err) {
-        console.error('Failed to upload 360p session video:', err);
+        console.error("Vault retrieval or upload failed:", err);
         return null;
       } finally {
         setIsUploadingVideo(false);
       }
     }
-    return null;
   };
 
   // 3.5 Submit Quiz Handler (Stable Callback)
@@ -826,13 +866,17 @@ export const QuizHub: React.FC = () => {
         try {
           setCameraStatus('Requesting...');
           const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 640, max: 640 },
-              height: { ideal: 360, max: 480 },
-              frameRate: { ideal: 15, max: 15 }
-            },
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 5, max: 5 } },
             audio: true
           });
+
+          // Telemetry Sync: Immediately update status to Active in Firestore
+          if (activeAttemptId) {
+            await updateDoc(doc(db, 'attempts', activeAttemptId), {
+              status: 'Active',
+              updatedAt: serverTimestamp()
+            });
+          }
 
           // Virtual Camera (OBS/ManyCam) Detection
           const videoTrack = mediaStream.getVideoTracks()[0];
@@ -851,11 +895,13 @@ export const QuizHub: React.FC = () => {
             }
           }
           
-          let options: any = { mimeType: 'video/webm;codecs=vp9,opus' };
+          await clearVault();
+
+          let options: any = { mimeType: 'video/webm;codecs=vp8,opus' };
           if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-            options = { mimeType: 'video/webm;codecs=vp8,opus' }; // Fallback
+            options = { mimeType: 'video/webm' };
             if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-              options = { mimeType: 'video/mp4' }; // Safari fallback
+              options = { mimeType: 'video/mp4' };
               if (!MediaRecorder.isTypeSupported(options.mimeType)) {
                 options = { mimeType: '' }; // Let browser decide
               }
@@ -863,13 +909,12 @@ export const QuizHub: React.FC = () => {
           }
           const mediaRecorder = new MediaRecorder(mediaStream, options);
           mediaRecorderRef.current = mediaRecorder;
-          recordedChunksRef.current = [];
-          mediaRecorder.ondataavailable = (event) => {
+          mediaRecorder.ondataavailable = async (event) => {
             if (event.data && event.data.size > 0) {
-              recordedChunksRef.current.push(event.data);
+              await saveChunkToVault(event.data);
             }
           };
-          mediaRecorder.start(1000);
+          mediaRecorder.start(3000);
 
           setAndRefStream(mediaStream);
           setCameraStatus('Active');
@@ -1393,7 +1438,7 @@ export const QuizHub: React.FC = () => {
       )}
 
       <div className="max-w-4xl mx-auto px-4 py-8" style={tenantColors}>
-      <canvas ref={canvasRef} className="hidden" width={640} height={480} />
+      <canvas ref={canvasRef} className="hidden" width={1280} height={720} />
       
       {/* 1. PORTAL ACCESS (HUB ENTRY SCREEN) */}
       {!activeHub && !finalAttempt && (

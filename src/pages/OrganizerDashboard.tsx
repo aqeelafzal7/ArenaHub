@@ -64,6 +64,19 @@ interface CsvQuestionRow {
   validationMessage?: string;
 }
 
+// Proctor flag text cleaner
+const parseProctorFlag = (flag: string) => {
+  if (!flag) return "";
+  if (flag.includes("Face Not Visible") || flag.includes("No Face")) return "No Face";
+  if (flag.includes("Multiple Faces")) return "Multiple Faces";
+  if (flag.includes("Tab Switch")) return "Tab Switch";
+  if (flag.includes("Audio Detected") || flag.includes("Speech / Voice")) return "Voice Detected";
+  if (flag.includes("Manually Terminated")) return "Terminated by Admin";
+  if (flag.includes("DevTools")) return "DevTools Activity";
+  if (flag.includes("Full Screen")) return "Exited Full Screen";
+  return flag.length > 30 ? flag.slice(0, 30) + "..." : flag;
+};
+
 export const OrganizerDashboard: React.FC = () => {
   const { user } = useAuth();
 
@@ -2517,22 +2530,6 @@ export const OrganizerDashboard: React.FC = () => {
                                       <span className="text-[10px] text-brand-muted block mt-0.5">
                                         {attempt.userEmail}
                                       </span>
-
-                                      {/* Embedded Video Auditing (Google Drive Iframe) */}
-                                      {attempt.recordingUrl && (
-                                        <div className="mt-4">
-                                          <h4 className="text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                                            <span>📹</span> Session Video Recording
-                                          </h4>
-                                          <iframe
-                                            src={attempt.recordingUrl.replace('/view', '/preview')}
-                                            width="100%"
-                                            height="200"
-                                            allow="autoplay"
-                                            className="rounded-lg border-2 border-slate-300 bg-slate-100 min-w-[240px]"
-                                          />
-                                        </div>
-                                      )}
                                     </div>
                                   </td>
 
