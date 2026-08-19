@@ -1294,36 +1294,55 @@ export const QuizHub: React.FC = () => {
     } else {
       setQuestionTimer(null);
     }
-  }, [isQuizStarted, activeQuiz, currentQuestionIdx]);
+  }, [isQuizStarted, activeQuiz?.perQuestionTimer, activeQuiz?.timePerQuestionSeconds, currentQuestionIdx]);
 
-  // B. Safe interval loop (No dependencies on state)
+  // B. Safe countdown loop with robust safeguards
   useEffect(() => {
-    if (!isQuizStarted || isQuestionMutationsLocked || !activeQuiz?.perQuestionTimer) return;
+    // 1. Guard clause: Do nothing if the timer isn't supposed to run yet
+    if (
+      !activeQuiz?.perQuestionTimer ||
+      questionTimer === null ||
+      questionTimer === undefined ||
+      !isQuizStarted ||
+      isQuestionMutationsLocked
+    ) {
+      return;
+    }
 
-    const qInterval = setInterval(() => {
-      setQuestionTimer((prev) => {
-        if (prev === null) return null;
-        if (prev <= 1) {
-          clearInterval(qInterval);
-          return 0; // Trigger auto-skip safely
+    // 2. Safely handle the timer hitting zero
+    if (questionTimer <= 0) {
+      // Ensure we actually have a question loaded before trying to skip it
+      if (
+        currentQuestionIdx >= 0 &&
+        quizQuestions &&
+        quizQuestions.length > 0 &&
+        quizQuestions[currentQuestionIdx] &&
+        !isSubmittingRef.current
+      ) {
+        if (currentQuestionIdx < quizQuestions.length - 1) {
+          setCurrentQuestionIdx((prev) => prev + 1);
+        } else {
+          handleSubmitQuiz('Submitted');
         }
-        return prev - 1;
-      });
+      }
+      return;
+    }
+
+    // 3. Normal countdown
+    const timerId = setTimeout(() => {
+      setQuestionTimer((prev) => (prev !== null && prev !== undefined && prev > 0 ? prev - 1 : 0));
     }, 1000);
 
-    return () => clearInterval(qInterval);
-  }, [isQuizStarted, isQuestionMutationsLocked, activeQuiz, currentQuestionIdx]);
-
-  // C. Execution logic when timer hits zero
-  useEffect(() => {
-    if (questionTimer === 0 && isQuizStarted && !isSubmittingRef.current) {
-      if (currentQuestionIdx < quizQuestions.length - 1) {
-        setCurrentQuestionIdx((p) => p + 1);
-      } else {
-        handleSubmitQuiz('Submitted');
-      }
-    }
-  }, [questionTimer, isQuizStarted, currentQuestionIdx, quizQuestions.length, handleSubmitQuiz]);
+    return () => clearTimeout(timerId);
+  }, [
+    questionTimer,
+    activeQuiz?.perQuestionTimer,
+    isQuizStarted,
+    isQuestionMutationsLocked,
+    currentQuestionIdx,
+    quizQuestions,
+    handleSubmitQuiz,
+  ]);
 
   // 4.5 Listen for Admin Remote Override (forceLocked)
   useEffect(() => {

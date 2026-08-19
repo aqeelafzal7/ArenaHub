@@ -1198,11 +1198,13 @@ export const QuizSession: React.FC = () => {
 
   // 4.1 Initialize Timer
   useEffect(() => {
-    if (!isQuizStarted || !exactStartTime || !activeQuiz) return;
+    if (!isQuizStarted || !activeQuiz) return;
     
     if (activeQuiz.perQuestionTimer) {
-      setTimeLeft(activeQuiz.timePerQuestionSeconds || 0);
-    } else {
+      if (activeQuiz.timePerQuestionSeconds && activeQuiz.timePerQuestionSeconds > 0) {
+        setTimeLeft(activeQuiz.timePerQuestionSeconds);
+      }
+    } else if (exactStartTime) {
       const startMs = new Date(exactStartTime).getTime();
       const elapsedSeconds = Math.floor((getTrueTime() - startMs) / 1000);
       const totalAllowedSeconds = activeQuiz.timeLimit * 60;
@@ -1211,46 +1213,62 @@ export const QuizSession: React.FC = () => {
     }
   }, [isQuizStarted, currentQuestionIdx, activeQuiz, exactStartTime, getTrueTime]);
 
-  // 4.2 Local Countdown Interval (Counts down safely)
+  // 4.2 Safe Countdown & Auto-Advance Handler
   useEffect(() => {
-    if (!isQuizStarted) return;
-
-    const localTimer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(localTimer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(localTimer);
-  }, [isQuizStarted, currentQuestionIdx, activeQuiz?.perQuestionTimer]);
-
-  // 4.3 Trigger Action on Timer Expired
-  useEffect(() => {
-    if (!isQuizStarted || timeLeft > 0) return;
+    // 1. Guard clause: Do nothing if the timer isn't supposed to run yet
+    if (!isQuizStarted || timeLeft === null || timeLeft === undefined) {
+      return;
+    }
 
     if (activeQuiz?.perQuestionTimer) {
-      if (isQuestionMutationsLocked) return;
-      
-      // Auto-submit current answer (or lack thereof) and move to next question
-      setAnswers((prev) => {
-        const currentQ = quizQuestions[currentQuestionIdx];
-        if (currentQ && !prev[currentQ.id]) {
-          return { ...prev, [currentQ.id]: "TIMED_OUT" };
-        }
-        return prev;
-      });
+      // 2. Safely handle the timer hitting zero for per-question mode
+      if (timeLeft <= 0) {
+        if (
+          !isQuestionMutationsLocked &&
+          !isSubmittingRef.current &&
+          currentQuestionIdx >= 0 &&
+          quizQuestions &&
+          quizQuestions.length > 0 &&
+          quizQuestions[currentQuestionIdx]
+        ) {
+          // Auto-record timeout answer
+          setAnswers((prev) => {
+            const currentQ = quizQuestions[currentQuestionIdx];
+            if (currentQ && !prev[currentQ.id]) {
+              return { ...prev, [currentQ.id]: "TIMED_OUT" };
+            }
+            return prev;
+          });
 
-      if (currentQuestionIdx < quizQuestions.length - 1) {
-        setCurrentQuestionIdx((p) => p + 1);
-      } else {
-        handleSubmitQuiz("Submitted", true);
+          if (currentQuestionIdx < quizQuestions.length - 1) {
+            setCurrentQuestionIdx((p) => p + 1);
+          } else {
+            handleSubmitQuiz("Submitted", true);
+          }
+        }
+        return;
       }
+
+      // 3. Normal per-question countdown
+      const timerId = setTimeout(() => {
+        setTimeLeft((prev) => (prev !== null && prev !== undefined && prev > 0 ? prev - 1 : 0));
+      }, 1000);
+
+      return () => clearTimeout(timerId);
     } else {
-      handleSubmitQuiz("Timer Expired", true);
+      // Global quiz timer mode
+      if (timeLeft <= 0) {
+        if (!isSubmittingRef.current) {
+          handleSubmitQuiz("Timer Expired", true);
+        }
+        return;
+      }
+
+      const timerId = setTimeout(() => {
+        setTimeLeft((prev) => (prev !== null && prev !== undefined && prev > 0 ? prev - 1 : 0));
+      }, 1000);
+
+      return () => clearTimeout(timerId);
     }
   }, [
     timeLeft,

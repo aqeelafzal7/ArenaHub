@@ -736,7 +736,7 @@ export const OrganizerDashboard: React.FC = () => {
       hubId: hub.id,
       joinCode,
       title: quizTitle.trim(),
-      passPercentage: Number(quizPassPercentage),
+      passPercentage: 50,
       isActive: true,
       isLiveCompetition: false,
       createdAt: new Date().toISOString(),
@@ -744,19 +744,16 @@ export const OrganizerDashboard: React.FC = () => {
       allowedCnics: [],
       openAt: "",
       closeAt: "",
-      postSubmissionText: postSubmissionText.trim(),
-      perQuestionTimer: isPerQuestionTimer,
-      timePerQuestionSeconds: isPerQuestionTimer
-        ? Number(timePerQuestionSeconds)
-        : null,
-      timeLimit: !isPerQuestionTimer ? Number(quizTimeLimit) : 0,
+      postSubmissionText: "",
+      perQuestionTimer: false,
+      timePerQuestionSeconds: null,
+      timeLimit: 15,
     };
 
     try {
       await setDoc(doc(db, "quizzes", quizId), newQuiz);
       setQuizzes((prev) => [newQuiz, ...prev]);
       setQuizTitle("");
-      setPostSubmissionText("");
       setSelectedQuiz(newQuiz);
     } catch (err: any) {
       setError(err.message || "Failed to construct a new quiz instance");
@@ -1636,58 +1633,6 @@ export const OrganizerDashboard: React.FC = () => {
                         placeholder="E.g., Senior Systems Analyst Midterm"
                         className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/30 outline-none text-xs"
                         id="quiz-title-input"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-brand-text mb-1">
-                          Limit (Mins)
-                        </label>
-                        <input
-                          type="number"
-                          required
-                          min="1"
-                          max="300"
-                          value={quizTimeLimit}
-                          onChange={(e) =>
-                            setQuizTimeLimit(Number(e.target.value))
-                          }
-                          className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text text-xs"
-                          id="quiz-time-input"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-brand-text mb-1">
-                          Target Score %
-                        </label>
-                        <input
-                          type="number"
-                          required
-                          min="10"
-                          max="100"
-                          value={quizPassPercentage}
-                          onChange={(e) =>
-                            setQuizPassPercentage(Number(e.target.value))
-                          }
-                          className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text text-xs"
-                          id="quiz-pass-input"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-brand-text mb-1">
-                        Post-Submission Message (Optional)
-                      </label>
-                      <textarea
-                        value={postSubmissionText}
-                        onChange={(e) => setPostSubmissionText(e.target.value)}
-                        placeholder="E.g., Your quiz has been submitted successfully. Custom results will be announced via email."
-                        rows={2}
-                        className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text placeholder-brand-muted focus:ring-2 focus:ring-brand-primary/30 outline-none text-xs"
-                        id="quiz-post-submission-text-input"
                       />
                     </div>
 
